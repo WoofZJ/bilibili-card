@@ -22,7 +22,7 @@ import random
 import platform
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from models import VideoInfo, CommentsData, CommentItem, EmoteInfo
+from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
@@ -49,6 +49,133 @@ COLOR_DIVIDER = (240, 240, 240)
 # ── 字体加载 ─────────────────────────────────────
 _ASSETS_DIR = Path(__file__).parent / "assets"
 _BUNDLED_FONT = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
+
+# 回退字体列表：用于主字体缺失的 Unicode 字符 / Emoji
+_FALLBACK_FONT_NAMES = [
+    "assets/tahoma.ttf",       # Windows - 覆盖大量 Unicode 特殊字符
+    "assets/seguisym.ttf",     # Windows - Segoe UI Symbol
+    "assets/seguiemj.ttf",     # Windows - Segoe UI Emoji
+]
+_FALLBACK_FONT_CACHE: dict[int, list[ImageFont.FreeTypeFont]] = {}
+
+
+def _find_fallback_fonts(size: int) -> list[ImageFont.FreeTypeFont]:
+    """加载所有可用的回退字体，结果缓存"""
+    if size in _FALLBACK_FONT_CACHE:
+        return _FALLBACK_FONT_CACHE[size]
+    fonts = []
+    for name in _FALLBACK_FONT_NAMES:
+        try:
+            f = ImageFont.truetype(name, size)
+            fonts.append(f)
+        except (OSError, IOError):
+            continue
+    _FALLBACK_FONT_CACHE[size] = fonts
+    return fonts
+
+
+# 主字体 .notdef 参考：用于判断某个字符是否缺失
+_NOTDEF_REF: dict[int, bytes] = {}
+
+
+def _is_tofu(char: str, font: ImageFont.FreeTypeFont) -> bool:
+    """判断字符在指定字体中是否为 .notdef (豆腐块)"""
+    size_key = int(font.size)
+    if size_key not in _NOTDEF_REF:
+        _NOTDEF_REF[size_key] = bytes(font.getmask(chr(0xFFFE)))
+    return bytes(font.getmask(char)) == _NOTDEF_REF[size_key]
+
+
+def _find_font_for_char(char: str, main_font: ImageFont.FreeTypeFont) -> ImageFont.FreeTypeFont | None:
+    """为缺失字符寻找能渲染的回退字体"""
+    for fb in _find_fallback_fonts(int(main_font.size)):
+        if not _is_tofu(char, fb):
+            return fb
+    return None
+
+
+# 是否为 Emoji 字符（用于 embedded_color 渲染）
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FAFF"
+    "\U00002600-\U000026FF"
+    "\U00002702-\U000027B0"
+    "\U0000FE00-\U0000FE0F"
+    "\U0000200D"
+    "]+"
+)
+
+
+def _draw_text_with_fallback(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    fill,
+    font: ImageFont.FreeTypeFont,
+    canvas: Image.Image | None = None,
+) -> float:
+    """绘制文本，对主字体缺失的字符自动切换到回退字体。返回占用横向宽度。
+
+    - 普通 Unicode 字符: 用回退字体直接绘制
+    - Emoji 字符: 用回退字体 + embedded_color=True 绘制彩色
+    """
+    # 快速路径：全部字符主字体都能渲染
+    has_missing = any(_is_tofu(ch, font) for ch in text if ord(ch) > 127)
+    if not has_missing:
+        draw.text(xy, text, fill=fill, font=font)
+        return font.getlength(text)
+
+    # 逐字符/段分组: 连续可渲染的文字一起绘制，缺失的逐个找回退字体
+    x, y = xy
+    cx = 0.0
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ord(ch) <= 127 or not _is_tofu(ch, font):
+            # 主字体能渲染 -> 尽量收集连续可渲染字符一起绘制
+            j = i + 1
+            while j < len(text) and (ord(text[j]) <= 127 or not _is_tofu(text[j], font)):
+                j += 1
+            segment = text[i:j]
+            draw.text((x + cx, y), segment, fill=fill, font=font)
+            cx += font.getlength(segment)
+            i = j
+        else:
+            # 主字体缺失 -> 尝试收集连续缺失字符，找同一回退字体
+            fb = _find_font_for_char(ch, font)
+            if fb:
+                j = i + 1
+                while j < len(text) and _is_tofu(text[j], font) and not _is_tofu(text[j], fb):
+                    j += 1
+                segment = text[i:j]
+                use_color = bool(_EMOJI_RE.search(segment))
+                if use_color and canvas:
+                    e_bbox = fb.getbbox(segment)
+                    e_w = e_bbox[2] - e_bbox[0]
+                    e_h = e_bbox[3] - e_bbox[1]
+                    e_img = Image.new("RGBA", (e_w + 4, e_h + 4), (0, 0, 0, 0))
+                    e_draw = ImageDraw.Draw(e_img)
+                    e_draw.text((-e_bbox[0], -e_bbox[1]), segment, fill=fill, font=fb, embedded_color=True)
+                    paste_y = int(y + (font.size - e_h) // 2)
+                    canvas.paste(e_img, (int(x + cx), paste_y), e_img)
+                    cx += e_w + 2
+                else:
+                    kwargs = {"embedded_color": True} if use_color else {}
+                    draw.text((x + cx, y), segment, fill=fill, font=fb, **kwargs)
+                    cx += fb.getlength(segment)
+                i = j
+            else:
+                # 全部回退字体都没有 -> 用主字体画豆腐块
+                draw.text((x + cx, y), ch, fill=fill, font=font)
+                cx += font.getlength(ch)
+                i += 1
+    return cx
+
 
 def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     """加载字体，优先使用 assets 目录下的 LXGW 文楷等宽"""
@@ -307,8 +434,8 @@ def _draw_message_with_emotes(
         cx = x
         for seg_type, seg_data in line_segments:
             if seg_type == 'text':
-                draw.text((cx, y), seg_data, fill=text_color, font=font)
-                cx += int(font.getlength(seg_data))
+                tw = _draw_text_with_fallback(draw, (cx, y), seg_data, fill=text_color, font=font, canvas=canvas)
+                cx += int(tw)
             elif seg_type == 'emote':
                 emote_img = _load_emote(seg_data.url, emote_size)
                 if emote_img:
@@ -323,6 +450,134 @@ def _draw_message_with_emotes(
         y += line_height
         total_h += line_height
     return total_h
+
+
+# ── 评论配图处理 ─────────────────────────────────
+COMMENT_PIC_MAX_WIDTH = 700  # 配图最大显示宽度
+COMMENT_PIC_MAX_HEIGHT = 200  # 配图最大显示高度
+COMMENT_PIC_GAP = 8  # 多张图之间的间距
+COMMENT_PIC_RADIUS = 8  # 配图圆角
+
+_picture_cache: dict[str, Image.Image | None] = {}
+
+
+def _load_comment_picture(url: str, max_w: int = COMMENT_PIC_MAX_WIDTH, max_h: int = COMMENT_PIC_MAX_HEIGHT) -> Image.Image | None:
+    """下载评论配图并缩放到适当尺寸，结果带圆角"""
+    cache_key = f"{url}_{max_w}_{max_h}"
+    if cache_key in _picture_cache:
+        cached = _picture_cache[cache_key]
+        return cached.copy() if cached else None
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+
+        # 等比缩放使宽和高都不超过限制
+        w, h = img.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        if scale < 1.0:
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # 圆角遮罩
+        mask = Image.new("L", (new_w, new_h), 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle((0, 0, new_w, new_h), COMMENT_PIC_RADIUS, fill=255)
+        result = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+        result.paste(img, (0, 0), mask)
+
+        _picture_cache[cache_key] = result
+        return result.copy()
+    except Exception as e:
+        print(f"评论配图加载失败: {e}")
+        _picture_cache[cache_key] = None
+        return None
+
+
+def _measure_pictures_height(pictures: list[PictureInfo], max_w: int) -> int:
+    """预计算配图区域高度（横向排布，宽度不够时换行）"""
+    if not pictures:
+        return 0
+    total_h = 8  # 上方间距
+    cx = 0
+    row_h = 0
+    for pic in pictures:
+        if pic.img_width > 0 and pic.img_height > 0:
+            scale = min(COMMENT_PIC_MAX_WIDTH / pic.img_width, COMMENT_PIC_MAX_HEIGHT / pic.img_height, 1.0)
+            pic_w = int(pic.img_width * scale)
+            pic_h = int(pic.img_height * scale)
+        else:
+            pic_w, pic_h = COMMENT_PIC_MAX_WIDTH, COMMENT_PIC_MAX_HEIGHT
+        # 检查当前行是否放得下
+        if cx > 0 and cx + COMMENT_PIC_GAP + pic_w > max_w:
+            # 换行
+            total_h += row_h + COMMENT_PIC_GAP
+            cx = 0
+            row_h = 0
+        cx += pic_w + COMMENT_PIC_GAP
+        row_h = max(row_h, pic_h)
+    total_h += row_h + COMMENT_PIC_GAP
+    return total_h
+
+
+def _draw_pictures(
+    canvas: Image.Image,
+    pictures: list[PictureInfo],
+    x: int,
+    y: int,
+    max_w: int,
+) -> int:
+    """绘制评论配图（横向排布），返回占用总高度"""
+    if not pictures:
+        return 0
+    start_y = y
+    y += 8  # 上方间距
+    cx = x
+    row_h = 0
+    for pic in pictures:
+        pic_img = _load_comment_picture(pic.img_src)
+        if pic_img:
+            pw, ph = pic_img.size
+        else:
+            # 占位尺寸
+            if pic.img_width > 0 and pic.img_height > 0:
+                scale = min(COMMENT_PIC_MAX_WIDTH / pic.img_width, COMMENT_PIC_MAX_HEIGHT / pic.img_height, 1.0)
+                pw = int(pic.img_width * scale)
+                ph = int(pic.img_height * scale)
+            else:
+                pw, ph = COMMENT_PIC_MAX_WIDTH, 80
+
+        # 检查当前行是否放得下
+        if cx > x and cx + COMMENT_PIC_GAP + pw > x + max_w:
+            # 换行
+            y += row_h + COMMENT_PIC_GAP
+            cx = x
+            row_h = 0
+
+        if pic_img:
+            canvas.paste(pic_img, (cx, y), pic_img)
+        else:
+            # 加载失败时绘制占位框
+            placeholder = Image.new("RGBA", (pw, ph), (240, 240, 240, 255))
+            ph_draw = ImageDraw.Draw(placeholder)
+            ph_draw.rounded_rectangle((0, 0, pw, ph), COMMENT_PIC_RADIUS, outline=(200, 200, 200), width=1)
+            ph_text = "图片加载失败"
+            ph_font = FONT_COMMENT_META
+            tw = ph_font.getlength(ph_text)
+            ph_draw.text(((pw - tw) / 2, ph / 2 - 10), ph_text, fill=(180, 180, 180), font=ph_font)
+            canvas.paste(placeholder, (cx, y), placeholder)
+
+        cx += pw + COMMENT_PIC_GAP
+        row_h = max(row_h, ph)
+
+    y += row_h + COMMENT_PIC_GAP
+    return y - start_y
 
 
 # ── 封面处理 ─────────────────────────────────────
@@ -650,8 +905,14 @@ def _measure_comment_height(comment: CommentItem, content_width: int, is_sub: bo
     # 底部 meta 行（点赞、时间等）
     meta_h = 28 if is_sub else 30
 
-    # 总高度 = 用户名行 + 消息 + meta行 + 间距
-    h = name_line_h + 6 + msg_h + 8 + meta_h + 12
+    # 配图高度
+    pic_h = 0
+    if comment.pictures and not is_sub:
+        pic_max_w = min(text_width, COMMENT_PIC_MAX_WIDTH)
+        pic_h = _measure_pictures_height(comment.pictures, pic_max_w)
+
+    # 总高度 = 用户名行 + 消息 + 配图 + meta行 + 间距
+    h = name_line_h + 6 + msg_h + pic_h + 8 + meta_h + 12
 
     return max(h, avatar_size + 16)
 
@@ -738,6 +999,12 @@ def _draw_single_comment(
     wrapped = _wrap_message_segments(segments, font_msg, text_width, max_lines=6, emote_size=emote_size)
     msg_h = _draw_message_with_emotes(canvas, draw, wrapped, text_x, y, font_msg, msg_line_h, emote_size)
     y += msg_h
+
+    # ── 评论配图 ──
+    if comment.pictures and not is_sub:
+        pic_max_w = min(text_width, COMMENT_PIC_MAX_WIDTH)
+        pic_h = _draw_pictures(canvas, comment.pictures, text_x, y, pic_max_w)
+        y += pic_h
 
     y += 8
 

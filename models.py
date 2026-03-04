@@ -10,6 +10,14 @@ class EmoteInfo(BaseModel):
     size: int = 1  # 1=小表情(行内), 2=大表情
 
 
+class PictureInfo(BaseModel):
+    """评论配图信息"""
+    img_src: str  # 图片URL
+    img_width: int = 0  # 原始宽度
+    img_height: int = 0  # 原始高度
+    img_size: int = 0  # 文件大小(KB)
+
+
 class CommentItem(BaseModel):
     """单条评论"""
     rpid: int  # 评论ID
@@ -28,6 +36,7 @@ class CommentItem(BaseModel):
     contract_desc: str = ""  # 粉丝描述
     rcount: int = 0  # 回复数量
     emotes: dict[str, EmoteInfo] = {}  # 表情包映射 {"[doge]": EmoteInfo}
+    pictures: list[PictureInfo] = []  # 评论配图列表
     sub_replies: list["CommentItem"] = []  # 子评论
 
     @classmethod
@@ -57,6 +66,17 @@ class CommentItem(BaseModel):
                     size=val.get("meta", {}).get("size", 1),
                 )
 
+        # 解析评论配图
+        pictures = []
+        pic_data = content.get("pictures", []) or []
+        for pic in pic_data:
+            pictures.append(PictureInfo(
+                img_src=pic.get("img_src", ""),
+                img_width=pic.get("img_width", 0),
+                img_height=pic.get("img_height", 0),
+                img_size=pic.get("img_size", 0),
+            ))
+
         return cls(
             rpid=reply.get("rpid", 0),
             uname=member.get("uname", ""),
@@ -74,6 +94,7 @@ class CommentItem(BaseModel):
             contract_desc=member.get("contract_desc", ""),
             rcount=reply.get("rcount", 0),
             emotes=emotes,
+            pictures=pictures,
             sub_replies=sub_replies,
         )
 
