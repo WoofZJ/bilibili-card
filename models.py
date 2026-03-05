@@ -15,7 +15,7 @@ class PictureInfo(BaseModel):
     img_src: str  # 图片URL
     img_width: int = 0  # 原始宽度
     img_height: int = 0  # 原始高度
-    img_size: int = 0  # 文件大小(KB)
+    img_size: float = 0  # 文件大小(KB)
 
 
 class CommentItem(BaseModel):
@@ -74,7 +74,7 @@ class CommentItem(BaseModel):
                 img_src=pic.get("img_src", ""),
                 img_width=pic.get("img_width", 0),
                 img_height=pic.get("img_height", 0),
-                img_size=pic.get("img_size", 0),
+                img_size=pic.get("img_size", 0.0),
             ))
 
         return cls(
