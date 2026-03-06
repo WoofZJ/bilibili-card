@@ -845,8 +845,8 @@ COMMENT_PADDING = 20
 COMMENT_AVATAR_SIZE = 48
 COMMENT_SUB_AVATAR_SIZE = 36
 COLOR_COMMENT_BG = (255, 255, 255)
-COLOR_COMMENT_HEADER_BG = (251, 114, 153)
-COLOR_COMMENT_HEADER_TEXT = (255, 255, 255)
+COLOR_COMMENT_HEADER_BG = (254, 213, 214)
+COLOR_COMMENT_HEADER_TEXT = (34, 34, 34)
 COLOR_UP_BADGE_BG = (251, 114, 153)
 COLOR_UP_BADGE_TEXT = (255, 255, 255)
 COLOR_TOP_BADGE_BG = (255, 215, 0)
@@ -1069,7 +1069,7 @@ def render_comments_card(comments_data: CommentsData, max_comments: int = 15) ->
     content_width = COMMENT_CARD_WIDTH - COMMENT_PADDING * 2
 
     # ── 第一轮：计算总高度 ──
-    header_h = 40  # 顶部 "评论 (N)" 区域
+    header_h = 50  # 顶部 "评论 (N)" 区域
 
     # 收集要显示的评论
     display_comments: list[tuple[CommentItem, bool]] = []  # (comment, is_top)
@@ -1099,12 +1099,9 @@ def render_comments_card(comments_data: CommentsData, max_comments: int = 15) ->
     _rounded_rectangle(draw, (0, 0, COMMENT_CARD_WIDTH, total_h), 0, (255, 255, 255, 255))
 
     # ── 头部：评论 (N) ──
-    _rounded_rectangle(
-        draw,
-        (0, 0, COMMENT_CARD_WIDTH, header_h),
-        0,
-        COLOR_COMMENT_HEADER_BG,
-    )
+    _rounded_rectangle(draw, (0, 0, COMMENT_CARD_WIDTH, header_h), 0, COLOR_COMMENT_HEADER_BG)
+    logo_w = _draw_logo(canvas, "assets/bilibili.png", COMMENT_PADDING, (header_h-40) // 2, 40)
+    _draw_logo(canvas, "assets/bilibili.png", COMMENT_CARD_WIDTH - COMMENT_PADDING - logo_w, (header_h-40) // 2, 40)
     header_text = f"热门评论 ({comments_data.total})"
     header_tw = FONT_COMMENT_HEADER.getlength(header_text)
     height = FONT_COMMENT_HEADER.getbbox(header_text)[3]
@@ -1150,9 +1147,12 @@ def render_comments_card(comments_data: CommentsData, max_comments: int = 15) ->
                 width=1,
             )
             y_cursor += 12
+    y_cursor -= 18
+    _draw_copyright(draw, canvas, COMMENT_CARD_WIDTH // 2 - 100, y_cursor)
+    y_cursor += 30
 
     # 裁切到实际高度
-    actual_h = y_cursor + COMMENT_PADDING
+    actual_h = y_cursor
     if actual_h < total_h:
         canvas = canvas.crop((0, 0, COMMENT_CARD_WIDTH, actual_h))
 
