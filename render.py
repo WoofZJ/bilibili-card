@@ -627,7 +627,11 @@ COLOR_DANMAKU_SHADOW = (0, 0, 0)  # 描边/阴影色
 def _draw_danmaku_on_cover(cover: Image.Image, danmaku_list: list[str]) -> Image.Image:
     """
     将弹幕列表绘制到封面图上，模拟 B 站弹幕滚动效果。
-    弹幕按行分布，在水平方向上随机偏移，白色文字带黑色描边。
+
+    布局策略:
+    - 弹幕少时：均匀分散到整个可用垂直空间，行间距自适应拉大
+    - 弹幕多时：先尝试无重叠放置，放不下时允许轻微 y 偏移溢出
+    - 同行弹幕在水平方向上尽量不重叠（贪心区间检测）
     """
     if not danmaku_list:
         return cover
@@ -638,35 +642,146 @@ def _draw_danmaku_on_cover(cover: Image.Image, danmaku_list: list[str]) -> Image
 
     cover_w, cover_h = overlay.size
     font = FONT_DANMAKU
-    line_height = 40  # 行高
-    margin_top = 20
-    margin_bottom = 60  # 底部留出空间给时长标签
-
-    # 可用行数
+    min_line_height = 36       # 最小行高
+    margin_top = 5
+    margin_bottom = 45         # 底部留出空间给时长标签
     available_h = cover_h - margin_top - margin_bottom
-    max_rows = max(1, available_h // line_height)
 
-    # 为每条弹幕分配行位置和随机水平偏移
-    rng = random.Random()  # 固定种子使结果可复现
+    n = len(danmaku_list)
+    rng = random.Random(42)    # 固定种子保证可复现
+
+    # ── 1. 计算每条弹幕的文字宽度 ──
+    text_widths = [font.getlength(t) for t in danmaku_list]
+
+    # ── 2. 确定行数与行高 ──
+    # 最多可容纳的行数（按最小行高）
+    max_possible_rows = max(1, available_h // min_line_height)
+    # 实际使用的行数：不超过弹幕数，也不超过最大行数
+    num_rows = min(n, max_possible_rows)
+    # 自适应行高：弹幕少时均匀撑满整个可用区域
+    line_height = available_h / num_rows if num_rows > 0 else min_line_height
+
+    # ── 3. 将弹幕分配到行（尽量均匀） ──
+    # 按每行一个桶，轮流放入，保证各行弹幕数量差 ≤ 1
+    row_buckets: list[list[int]] = [[] for _ in range(num_rows)]
+    for i in range(n):
+        row_buckets[i % num_rows].append(i)
+
+    # ── 4. 行内水平去重叠放置 ──
+    # placed[i] = (x, y, w) 已放置弹幕的位置信息
+    placed: list[tuple[float, float, float]] = [(0, 0, 0)] * n
+
+    for row_idx, indices in enumerate(row_buckets):
+        if not indices:
+            continue
+        row_y_center = margin_top + row_idx * line_height
+
+        # 按文字宽度降序排列，大的先放，贪心更容易成功
+        sorted_indices = sorted(indices, key=lambda i: text_widths[i], reverse=True)
+
+        # 当前行已占用的水平区间列表 [(x_start, x_end), ...]
+        occupied: list[tuple[float, float]] = []
+
+        for idx in sorted_indices:
+            tw = text_widths[idx]
+            padding_x = 20  # 弹幕间最小水平间距
+
+            # 尝试找到不重叠的 x 位置
+            best_x = _find_non_overlapping_x(
+                tw, cover_w, occupied, padding_x, rng
+            )
+
+            # y 方向加微小随机抖动，使同行弹幕不在完全相同的 y 上
+            jitter_range = max(1, int(line_height * 0.15))
+            y_jitter = rng.randint(-jitter_range, jitter_range)
+            final_y = row_y_center + y_jitter
+            # 确保不超出安全区域（允许少量溢出）
+            final_y = max(margin_top - 5, min(final_y, margin_top + available_h - min_line_height + 5))
+
+            placed[idx] = (best_x, final_y, tw)
+            occupied.append((best_x - padding_x / 2, best_x + tw + padding_x / 2))
+
+    # ── 5. 绘制所有弹幕 ──
     for i, text in enumerate(danmaku_list):
-        row = i % max_rows
-        y = margin_top + row * line_height
+        x, y, _ = placed[i]
+        ix, iy = int(x), int(y)
 
-        text_w = font.getlength(text)
-        # 水平位置：在可用范围内随机偏移，错开同行弹幕
-        max_x = max(0, cover_w - text_w - 20)
-        x = rng.randint(10, max(10, int(max_x)))
-
-        # 描边效果：四个方向各偏移 1px 画黑色文字
-        stroke_offsets = [(-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]
+        # 描边效果：8 方向偏移画黑色文字
+        stroke_offsets = [(-1, -1), (-1, 1), (1, -1), (1, 1),
+                          (-2, 0), (2, 0), (0, -2), (0, 2)]
         for dx, dy in stroke_offsets:
-            draw.text((x + dx, y + dy), text, fill=(0, 0, 0, 200), font=font)
+            draw.text((ix + dx, iy + dy), text, fill=(0, 0, 0, 200), font=font)
 
-        # 白色弹幕文字，带半透明度
-        draw.text((x, y), text, fill=(255, 255, 255, 230), font=font)
+        # 白色弹幕文字
+        draw.text((ix, iy), text, fill=(255, 255, 255, 230), font=font)
 
     overlay = Image.alpha_composite(overlay, txt_layer)
     return overlay.convert("RGB")
+
+
+def _find_non_overlapping_x(
+    text_w: float,
+    canvas_w: int,
+    occupied: list[tuple[float, float]],
+    padding: float,
+    rng: random.Random,
+) -> float:
+    """在水平方向上寻找一个不与已有区间重叠的 x 位置。
+
+    策略: 先收集所有空闲区间，从中随机选一个足够宽的区间放置；
+    若没有足够宽的空闲区间，则选最宽的空闲区间居中放置（允许溢出）。
+    """
+    margin = 10
+    total_w = canvas_w - margin * 2
+    need_w = text_w
+
+    if not occupied:
+        # 没有已占用区间 → 随机放
+        max_x = max(margin, int(canvas_w - text_w - margin))
+        return float(rng.randint(margin, max(margin, max_x)))
+
+    # 将已占用区间按左端排序
+    sorted_occ = sorted(occupied, key=lambda seg: seg[0])
+
+    # 构建空闲区间列表
+    free_intervals: list[tuple[float, float]] = []
+    prev_end = float(margin)
+    for seg_start, seg_end in sorted_occ:
+        if seg_start > prev_end:
+            free_intervals.append((prev_end, seg_start))
+        prev_end = max(prev_end, seg_end)
+    # 右侧剩余
+    right_limit = float(canvas_w - margin)
+    if prev_end < right_limit:
+        free_intervals.append((prev_end, right_limit))
+
+    # 分为「足够宽」和「不够宽但可用」两类
+    good: list[tuple[float, float]] = []
+    fallback: list[tuple[float, float]] = []
+    for a, b in free_intervals:
+        width = b - a
+        if width >= need_w:
+            good.append((a, b))
+        elif width > 0:
+            fallback.append((a, b))
+
+    if good:
+        # 从足够宽的空闲区间中随机选一个，然后在区间内随机放置
+        interval = rng.choice(good)
+        lo = interval[0]
+        hi = interval[1] - need_w
+        return float(rng.randint(int(lo), max(int(lo), int(hi))))
+
+    if fallback:
+        # 选最宽的空闲区间，居中放置（会部分超出该区间，但比完全重叠好）
+        best = max(fallback, key=lambda seg: seg[1] - seg[0])
+        center = (best[0] + best[1]) / 2
+        x = center - need_w / 2
+        return max(float(margin), min(x, float(canvas_w - need_w - margin)))
+
+    # 完全没有空闲空间 → 随机放
+    max_x = max(margin, int(canvas_w - text_w - margin))
+    return float(rng.randint(margin, max(margin, max_x)))
 
 def _draw_logo(image: Image.Image, logo_path: str,  x: int, y: int, height: int) -> int:
     logo = Image.open(logo_path).convert("RGBA")
