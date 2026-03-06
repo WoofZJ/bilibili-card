@@ -181,11 +181,13 @@ class VideoInfo(BaseModel):
     @property
     def resolution_str(self) -> str:
         """分辨率标签"""
-        return f"最高分辨率：{self.width}x{self.height}"
+        return f"{self.width}x{self.height}"
 
     @staticmethod
     def format_count(n: int) -> str:
-        """格式化数字：超过1万显示 x.x万"""
+        """格式化数字"""
+        if n >= 1000000:
+            return f"{n / 10000:.0f}万"
         if n >= 10000:
             return f"{n / 10000:.1f}万"
         return str(n)

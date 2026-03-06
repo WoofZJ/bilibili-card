@@ -26,20 +26,19 @@ from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
-CARD_HEIGHT = 870
+CARD_HEIGHT = 860
 COVER_HEIGHT = 450  # 800 / 16 * 9
 PADDING = 16
 LINE_GAP = 10
 CARD_BG = (255, 255, 255)
 CARD_RADIUS = 0
 SHADOW_COLOR = (0, 0, 0, 40)
-AVATAR_SIZE = 80
+AVATAR_SIZE = 60
 
 COLOR_TITLE = (30, 30, 30)
 COLOR_SUB = (102, 102, 102)
 COLOR_ACCENT = (251, 114, 153)  # B站粉
-COLOR_TAG_BG = (251, 114, 153)
-COLOR_TAG_TEXT = (255, 255, 255)
+COLOR_DESC_TEXT = (153, 153, 153)
 COLOR_STAT_LABEL = (153, 153, 153)
 COLOR_STAT_VALUE = (51, 51, 51)
 COLOR_DURATION_BG = (0, 0, 0, 180)
@@ -186,7 +185,7 @@ def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
             pass
 
 FONT_TITLE = _find_font(36, bold=True)
-FONT_BODY = _find_font(28)
+FONT_BODY = _find_font(28, bold=True)
 FONT_SMALL = _find_font(24)
 FONT_TAG = _find_font(24, bold=True)
 FONT_DURATION = _find_font(28, bold=True)
@@ -206,8 +205,8 @@ def _draw_tag(draw: ImageDraw.ImageDraw, xy, text: str, font, bg_color, text_col
     bbox = font.getbbox(text)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     pad_x, pad_y = 20, 10
-    _rounded_rectangle(draw, (x, y, x + tw + pad_x * 2, y + th + pad_y * 2), radius, bg_color)
-    draw.text((x + pad_x, y + pad_y -3), text, fill=text_color, font=font)
+    # _rounded_rectangle(draw, (x, y, x + tw + pad_x * 2, y + th + pad_y * 2), radius, bg_color)
+    draw.text((x + pad_x, y + pad_y -3), text, fill=bg_color, font=font)
     return tw + pad_x * 2
 
 
@@ -252,15 +251,15 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, max_line
     return lines
 
 
-def _draw_stat_item(draw: ImageDraw.ImageDraw, x: int, y: int, label: str, value: str) -> int:
+def _draw_stat_item(draw: ImageDraw.ImageDraw, x: int, y: int, item_width: int, label: str, value: str) -> int:
     """绘制单个统计项: 数值 + 标签, 返回占用宽度"""
     # 数值
-    draw.text((x, y), value, fill=COLOR_STAT_VALUE, font=FONT_STAT_VALUE)
     val_w = FONT_STAT_VALUE.getlength(value)
+    draw.text((x+item_width//2 - val_w//2, y), value, fill=COLOR_STAT_VALUE, font=FONT_STAT_VALUE)
     # 标签
     label_bbox = FONT_STAT_LABEL.getbbox(label)
-    label_h = label_bbox[3] - label_bbox[1]
-    draw.text((x, y + 42), label, fill=COLOR_STAT_LABEL, font=FONT_STAT_LABEL)
+    label_w = label_bbox[2] - label_bbox[0]
+    draw.text((x+item_width//2 - label_w//2, y + 42), label, fill=COLOR_STAT_LABEL, font=FONT_STAT_LABEL)
     label_w = FONT_STAT_LABEL.getlength(label)
     return int(max(val_w, label_w)) + 40
 
@@ -669,6 +668,27 @@ def _draw_danmaku_on_cover(cover: Image.Image, danmaku_list: list[str]) -> Image
     overlay = Image.alpha_composite(overlay, txt_layer)
     return overlay.convert("RGB")
 
+def _draw_logo(image: Image.Image, logo_path: str,  x: int, y: int, height: int) -> int:
+    logo = Image.open(logo_path).convert("RGBA")
+    # 等比缩放
+    w, h = logo.size
+    scale = height / h
+    new_w = int(w * scale)
+    logo = logo.resize((new_w, height), Image.Resampling.LANCZOS)
+    image.paste(logo, (x, y), logo)
+    return new_w
+
+def _draw_copyright(draw: Image.Image, canvas: ImageDraw.ImageDraw, x: int, y: int):
+    text = "Made by"
+    draw.text((x, y), text, fill=COLOR_STAT_LABEL, font=FONT_SMALL)
+    text_w = FONT_SMALL.getlength(text)
+    x += int(text_w) + 5
+    logo_w = _draw_logo(canvas, "assets/logo.png", x, y-2, 32)
+    text = "WoofZJ"
+    x += logo_w + 5
+    draw.text((x, y), text, fill=(255, 0, 0), font=FONT_SMALL)
+    text_w = FONT_SMALL.getlength(text)
+    x += int(text_w)
 
 # ── 主渲染函数 ────────────────────────────────────
 def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_list: list[str] | None = None) -> Image.Image:
@@ -760,18 +780,17 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     # 文字垂直居中到头像
     author_text = video.author_name
     text_y = y_cursor + (avatar_sz - 30) // 2
-    draw.text((PADDING + avatar_sz + 12, text_y), author_text, fill=COLOR_SUB, font=FONT_BODY)
+    draw.text((PADDING + avatar_sz + 12, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
 
-    # 分辨率标签
-    res_text = video.resolution_str
-    tag_x = CARD_WIDTH - PADDING - FONT_TAG.getlength(res_text) - 24
-    _draw_tag(draw, (tag_x, y_cursor + (avatar_sz - 34) // 2), res_text, FONT_TAG, COLOR_TAG_BG, COLOR_TAG_TEXT)
 
+    _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, avatar_sz - 10)
     y_cursor += avatar_sz + LINE_GAP
 
-    # ── 发布时间 + BV号 ──
-    time_text = f"发布于 {video.publish_time_str}    {video.bvid}"
-    draw.text((PADDING, y_cursor), time_text, fill=COLOR_STAT_LABEL, font=FONT_SMALL)
+    # ── 发布时间 + BV号 + 分辨率──
+    res_text = video.resolution_str
+    time_text = f"发布于 {video.publish_time_str} | {video.bvid} | 分辨率：{res_text}"
+    draw.text((PADDING, y_cursor), time_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
+
 
     y_cursor += 28 + PADDING
 
@@ -784,7 +803,7 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     snapshot_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     snapshot_text = f"截止于 {snapshot_time} 的数据"
     snapshot_w = FONT_SMALL.getlength(snapshot_text)
-    draw.text(((CARD_WIDTH - snapshot_w) / 2, y_cursor), snapshot_text, fill=COLOR_STAT_LABEL, font=FONT_SMALL)
+    draw.text(((CARD_WIDTH - snapshot_w) / 2, y_cursor), snapshot_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
     y_cursor += 30 + LINE_GAP
 
     # ── 统计数据 ──
@@ -802,8 +821,11 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     item_width = content_width // len(stats)
     x = PADDING
     for label, value in stats:
-        _draw_stat_item(draw, x, y_cursor, label, value)
-        x += item_width + 10
+        _draw_stat_item(draw, x, y_cursor, item_width, label, value)
+        x += item_width
+    y_cursor += 80
+
+    _draw_copyright(draw, canvas, CARD_WIDTH // 2 - 100, y_cursor)
 
     return canvas.convert("RGB")
 
