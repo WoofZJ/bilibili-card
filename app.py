@@ -110,7 +110,7 @@ async def _fetch_video_by_bvid(bvid: str) -> VideoInfo:
         danmakus = await v.get_danmaku_snapshot()
         if not os.path.exists("output/video_info"):
             os.makedirs("output/video_info")
-        with open(f"output/video_info/{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.json", "w", encoding="utf-8") as f:
+        with open(f"output/video_info/{bvid}.json", "w", encoding="utf-8") as f:
             import json
             json.dump(info, f, ensure_ascii=False, indent=2)
         log("fetch_video_by_bvid.log", f"API call completed for bvid={bvid}")
@@ -175,7 +175,7 @@ async def get_latest_video_image(user_id: int = Query(..., description="B站用�
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
     if not os.path.exists("output/image"):
         os.makedirs("output/image")
-    output_path = f"output/image/{video_info.bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.png"
+    output_path = f"output/image/{video_info.bvid}.png"
     with open(output_path, "wb") as f:
         f.write(img_bytes)
     return Response(content=img_bytes, media_type="image/png")
@@ -194,7 +194,7 @@ async def get_video_info_image(bvid: str = Query(..., description="视频BV号",
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
     if not os.path.exists("output/image"):
         os.makedirs("output/image")
-    output_path = f"output/image/{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.png"
+    output_path = f"output/image/{bvid}.png"
     with open(output_path, "wb") as f:
         f.write(img_bytes)
     return Response(content=img_bytes, media_type="image/png")
@@ -223,7 +223,7 @@ async def _fetch_comments(bvid: str) -> CommentsData:
         )
         if not os.path.exists("output/comments"):
             os.makedirs("output/comments")
-        with open(f"output/comments/{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.json", "w", encoding="utf-8") as f:
+        with open(f"output/comments/{bvid}.json", "w", encoding="utf-8") as f:
             import json
             json.dump(comments_raw, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -250,7 +250,7 @@ async def get_video_comments_image(
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
     if not os.path.exists("output/image"):
         os.makedirs("output/image")
-    output_path = f"output/image/comments_{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.png"
+    output_path = f"output/image/{bvid}_comments.png"
     with open(output_path, "wb") as f:
         f.write(img_bytes)
     return Response(content=img_bytes, media_type="image/png")
