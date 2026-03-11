@@ -221,6 +221,11 @@ async def _fetch_comments(bvid: str) -> CommentsData:
         comments_raw = await comment.get_comments_lazy(
             aid, type_=comment.CommentResourceType.VIDEO, order=comment.OrderType.LIKE
         )
+        if not os.path.exists("output/comments"):
+            os.makedirs("output/comments")
+        with open(f"output/comments/{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.json", "w", encoding="utf-8") as f:
+            import json
+            json.dump(comments_raw, f, ensure_ascii=False, indent=2)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"获取评论失败: {e}")
 
@@ -243,4 +248,9 @@ async def get_video_comments_image(
     if comments_data.total == 0 or (not comments_data.top_comment and not comments_data.comments):
         raise HTTPException(status_code=404, detail="该视频没有可见评论")
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
+    if not os.path.exists("output/image"):
+        os.makedirs("output/image")
+    output_path = f"output/image/comments_{bvid}_{time.strftime('%Y%m%d%H%M%S', time.localtime())}.png"
+    with open(output_path, "wb") as f:
+        f.write(img_bytes)
     return Response(content=img_bytes, media_type="image/png")
