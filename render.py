@@ -52,8 +52,8 @@ _BUNDLED_FONT = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
 # 回退字体列表：用于主字体缺失的 Unicode 字符 / Emoji
 _FALLBACK_FONT_NAMES = [
     "assets/tahoma.ttf",       # Windows - 覆盖大量 Unicode 特殊字符
-    "assets/seguisym.ttf",     # Windows - Segoe UI Symbol
     "assets/seguiemj.ttf",     # Windows - Segoe UI Emoji
+    "assets/seguisym.ttf",     # Windows - Segoe UI Symbol
 ]
 _FALLBACK_FONT_CACHE: dict[int, list[ImageFont.FreeTypeFont]] = {}
 
@@ -74,15 +74,15 @@ def _find_fallback_fonts(size: int) -> list[ImageFont.FreeTypeFont]:
 
 
 # 主字体 .notdef 参考：用于判断某个字符是否缺失
-_NOTDEF_REF: dict[int, bytes] = {}
+_NOTDEF_REF: dict[(int, str, str), bytes] = {}
 
 
 def _is_tofu(char: str, font: ImageFont.FreeTypeFont) -> bool:
     """判断字符在指定字体中是否为 .notdef (豆腐块)"""
     size_key = int(font.size)
-    if size_key not in _NOTDEF_REF:
-        _NOTDEF_REF[size_key] = bytes(font.getmask(chr(0xFFFE)))
-    return bytes(font.getmask(char)) == _NOTDEF_REF[size_key]
+    if (size_key, *font.getname()) not in _NOTDEF_REF:
+        _NOTDEF_REF[(size_key, *font.getname())] = bytes(font.getmask(chr(0xFFFE)))
+    return bytes(font.getmask(char)) == _NOTDEF_REF[(size_key, *font.getname())]
 
 
 def _find_font_for_char(char: str, main_font: ImageFont.FreeTypeFont) -> ImageFont.FreeTypeFont | None:
