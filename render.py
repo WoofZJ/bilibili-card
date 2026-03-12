@@ -875,7 +875,7 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     # ── 标题 ──
     y_cursor = COVER_HEIGHT + PADDING
     for line in title_lines:
-        draw.text((PADDING, y_cursor), line, fill=COLOR_TITLE, font=FONT_TITLE)
+        _draw_text_with_fallback(draw, (PADDING, y_cursor), line, fill=COLOR_TITLE, font=FONT_TITLE, canvas=canvas)
         y_cursor += title_line_height
 
     y_cursor += LINE_GAP
