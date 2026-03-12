@@ -1,4 +1,3 @@
 __pycache__/
 assets/
-output/
-*.log
+logs/
