@@ -22,7 +22,7 @@ import random
 import platform
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo
+from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
@@ -47,67 +47,114 @@ COLOR_DIVIDER = (240, 240, 240)
 
 # ── 字体加载 ─────────────────────────────────────
 _ASSETS_DIR = Path(__file__).parent / "assets"
-_BUNDLED_FONT = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
 
-# 回退字体列表：用于主字体缺失的 Unicode 字符 / Emoji
-_FALLBACK_FONT_NAMES = [
-    "assets/tahoma.ttf",       # Windows - 覆盖大量 Unicode 特殊字符
-    "assets/seguiemj.ttf",     # Windows - Segoe UI Emoji
-    "assets/seguisym.ttf",     # Windows - Segoe UI Symbol
-]
-_FALLBACK_FONT_CACHE: dict[int, list[ImageFont.FreeTypeFont]] = {}
+# ── 字体路径 ──────────────────────────────────────
+_MAIN_FONT_PATH = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
+_EMOJI_FONT_PATH = _ASSETS_DIR / "seguiemj.ttf"
+_FALLBACK_FONT_PATH = _ASSETS_DIR / "tahoma.ttf"
 
 
-def _find_fallback_fonts(size: int) -> list[ImageFont.FreeTypeFont]:
-    """加载所有可用的回退字体，结果缓存"""
-    if size in _FALLBACK_FONT_CACHE:
-        return _FALLBACK_FONT_CACHE[size]
-    fonts = []
-    for name in _FALLBACK_FONT_NAMES:
+class FontConfig:
+    """字体配置：主字体、emoji 字体、回退字体"""
+    def __init__(self, size: int):
+        self.main = ImageFont.truetype(str(_MAIN_FONT_PATH), size)
         try:
-            f = ImageFont.truetype(name, size)
-            fonts.append(f)
+            self.emoji = ImageFont.truetype(str(_EMOJI_FONT_PATH), size)
         except (OSError, IOError):
-            continue
-    _FALLBACK_FONT_CACHE[size] = fonts
-    return fonts
+            self.emoji = self.main
+        try:
+            self.fallback = ImageFont.truetype(str(_FALLBACK_FONT_PATH), size)
+        except (OSError, IOError):
+            self.fallback = self.main
+
+
+_font_config_cache: dict[int, FontConfig] = {}
+
+
+def _get_font_config(size: int) -> FontConfig:
+    """获取指定尺寸的字体配置（带缓存）"""
+    if size not in _font_config_cache:
+        _font_config_cache[size] = FontConfig(size)
+    return _font_config_cache[size]
 
 
 # 主字体 .notdef 参考：用于判断某个字符是否缺失
-_NOTDEF_REF: dict[(int, str, str), bytes] = {}
+_NOTDEF_REF: dict[tuple, bytes] = {}
 
 
 def _is_tofu(char: str, font: ImageFont.FreeTypeFont) -> bool:
     """判断字符在指定字体中是否为 .notdef (豆腐块)"""
-    size_key = int(font.size)
-    if (size_key, *font.getname()) not in _NOTDEF_REF:
-        _NOTDEF_REF[(size_key, *font.getname())] = bytes(font.getmask(chr(0xFFFE)))
-    return bytes(font.getmask(char)) == _NOTDEF_REF[(size_key, *font.getname())]
+    key = (int(font.size), *font.getname())
+    if key not in _NOTDEF_REF:
+        _NOTDEF_REF[key] = bytes(font.getmask(chr(0xFFFE)))
+    return bytes(font.getmask(char)) == _NOTDEF_REF[key]
 
 
-def _find_font_for_char(char: str, main_font: ImageFont.FreeTypeFont) -> ImageFont.FreeTypeFont | None:
-    """为缺失字符寻找能渲染的回退字体"""
-    for fb in _find_fallback_fonts(int(main_font.size)):
-        if not _is_tofu(char, fb):
-            return fb
-    return None
-
-
-# 是否为 Emoji 字符（用于 embedded_color 渲染）
-_EMOJI_RE = re.compile(
+# ── Emoji 正则：匹配完整的 emoji 序列（含肤色修饰符、ZWJ 等）──
+_EMOJI_BASE_CHARS = (
     "["
-    "\U0001F600-\U0001F64F"
-    "\U0001F300-\U0001F5FF"
-    "\U0001F680-\U0001F6FF"
-    "\U0001F1E0-\U0001F1FF"
-    "\U0001F900-\U0001F9FF"
-    "\U0001FA00-\U0001FAFF"
-    "\U00002600-\U000026FF"
-    "\U00002702-\U000027B0"
-    "\U0000FE00-\U0000FE0F"
-    "\U0000200D"
-    "]+"
+    "\U0001F600-\U0001F64F"  # Emoticons
+    "\U0001F300-\U0001F5FF"  # Misc Symbols & Pictographs
+    "\U0001F680-\U0001F6FF"  # Transport & Map
+    "\U0001F900-\U0001F9FF"  # Supplemental Symbols
+    "\U0001FA00-\U0001FAFF"  # Extended-A
+    "\U00002600-\U000027BF"  # Misc Symbols & Dingbats
+    "\U0000203C\U00002049"   # ‼⁉
+    "\U00002139\U00002328"   # ℹ⌨
+    "\U0000231A\U0000231B"   # ⌚⌛
+    "\U000023CF"             # ⏏
+    "\U000023E9-\U000023F3"  # ⏩-⏳
+    "\U000023F8-\U000023FA"  # ⏸-⏺
+    "\U000024C2"             # Ⓜ
+    "\U000025AA\U000025AB\U000025B6\U000025C0"
+    "\U000025FB-\U000025FE"
+    "\U00002934\U00002935"
+    "\U00002B05-\U00002B07"
+    "\U00002B1B\U00002B1C\U00002B50\U00002B55"
+    "\U00003030\U0000303D\U00003297\U00003299"
+    "\U0001F004\U0001F0CF"
+    "\U0001F170-\U0001F171\U0001F17E-\U0001F17F\U0001F18E"
+    "\U0001F191-\U0001F19A"
+    "\U0001F201-\U0001F202\U0001F21A\U0001F22F"
+    "\U0001F232-\U0001F23A\U0001F250-\U0001F251"
+    "]"
 )
+# 肤色修饰符 + 变体选择器
+_EMOJI_MOD = "[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F]"
+
+_EMOJI_RE = re.compile(
+    "[\U0001F1E0-\U0001F1FF]{2}"            # 旗帜序列
+    "|[0-9#*]\uFE0F?\u20E3"                 # 按键序列
+    "|(?:" + _EMOJI_BASE_CHARS +
+    _EMOJI_MOD + "*"                         # 可选肤色/变体
+    "(?:\u200D" + _EMOJI_BASE_CHARS +        # ZWJ 链
+    _EMOJI_MOD + "*)*)"
+)
+
+# ── 段落类型常量 ──
+SEG_TEXT = 'text'        # 普通文字（主字体）
+SEG_LINK = 'link'        # @提及 或 URL（主字体，蓝色）
+SEG_EMOTE = 'emote'      # B 站表情包（图片）
+SEG_EMOJI = 'emoji'      # Unicode emoji（emoji 字体）
+SEG_UNICODE = 'unicode'  # 其他主字体缺失的符号（回退字体）
+
+
+class LinkInfo:
+    """链接段落信息：携带原文、显示标题、前缀图标"""
+    __slots__ = ('raw', 'title', 'prefix_icon')
+    def __init__(self, raw: str, title: str = "", prefix_icon: str = ""):
+        self.raw = raw
+        self.title = title or raw
+        self.prefix_icon = prefix_icon
+
+
+Segment = tuple[str, str | EmoteInfo | LinkInfo]
+
+# 链接颜色
+COLOR_LINK = (0x00, 0x6B, 0xDE)
+
+# 肌肤色修饰符正则：用于去除 emoji 肤色
+_SKIN_TONE_RE = re.compile('[\U0001F3FB-\U0001F3FF]')
 
 
 def _draw_text_with_fallback(
@@ -118,69 +165,74 @@ def _draw_text_with_fallback(
     font: ImageFont.FreeTypeFont,
     canvas: Image.Image | None = None,
 ) -> float:
-    """绘制文本，对主字体缺失的字符自动切换到回退字体。返回占用横向宽度。
-
-    - 普通 Unicode 字符: 用回退字体直接绘制
-    - Emoji 字符: 用回退字体 + embedded_color=True 绘制彩色
-    """
-    # 快速路径：全部字符主字体都能渲染
-    has_missing = any(_is_tofu(ch, font) for ch in text if ord(ch) > 127)
-    if not has_missing:
-        draw.text(xy, text, fill=fill, font=font)
-        return font.getlength(text)
-
-    # 逐字符/段分组: 连续可渲染的文字一起绘制，缺失的逐个找回退字体
+    """绘制文本，自动使用 emoji 字体和回退字体。返回占用横向宽度。"""
+    fc = _get_font_config(int(font.size))
     x, y = xy
     cx = 0.0
+
+    # 按 emoji 序列切分，分别使用 emoji 字体渲染
+    last_end = 0
+    for match in _EMOJI_RE.finditer(text):
+        if match.start() > last_end:
+            seg = text[last_end:match.start()]
+            cx += _draw_plain_text(draw, (x + cx, y), seg, fill, fc)
+        emoji_text = match.group()
+        draw.text((x + cx, y+6), emoji_text, fill=fill, font=fc.emoji, embedded_color=True)
+        cx += fc.emoji.getlength(emoji_text)
+        last_end = match.end()
+
+    if last_end < len(text):
+        seg = text[last_end:]
+        cx += _draw_plain_text(draw, (x + cx, y), seg, fill, fc)
+
+    return cx
+
+
+def _draw_plain_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    fill,
+    fc: FontConfig,
+) -> float:
+    """绘制非 emoji 文本，主字体缺失时使用回退字体"""
+    x, y = xy
+    cx = 0.0
+    if not any(_is_tofu(ch, fc.main) for ch in text if ord(ch) > 127):
+        draw.text((x, y), text, fill=fill, font=fc.main)
+        return fc.main.getlength(text)
+
     i = 0
     while i < len(text):
         ch = text[i]
-        if ord(ch) <= 127 or not _is_tofu(ch, font):
-            # 主字体能渲染 -> 尽量收集连续可渲染字符一起绘制
+        if ord(ch) <= 127 or not _is_tofu(ch, fc.main):
             j = i + 1
-            while j < len(text) and (ord(text[j]) <= 127 or not _is_tofu(text[j], font)):
+            while j < len(text) and (ord(text[j]) <= 127 or not _is_tofu(text[j], fc.main)):
                 j += 1
-            segment = text[i:j]
-            draw.text((x + cx, y), segment, fill=fill, font=font)
-            cx += font.getlength(segment)
+            seg = text[i:j]
+            draw.text((x + cx, y), seg, fill=fill, font=fc.main)
+            cx += fc.main.getlength(seg)
+            i = j
+        elif not _is_tofu(ch, fc.fallback):
+            j = i + 1
+            while j < len(text) and _is_tofu(text[j], fc.main) and not _is_tofu(text[j], fc.fallback):
+                j += 1
+            seg = text[i:j]
+            draw.text((x + cx, y), seg, fill=fill, font=fc.fallback)
+            cx += fc.fallback.getlength(seg)
             i = j
         else:
-            # 主字体缺失 -> 尝试收集连续缺失字符，找同一回退字体
-            fb = _find_font_for_char(ch, font)
-            if fb:
-                j = i + 1
-                while j < len(text) and _is_tofu(text[j], font) and not _is_tofu(text[j], fb):
-                    j += 1
-                segment = text[i:j]
-                use_color = bool(_EMOJI_RE.search(segment))
-                if use_color and canvas:
-                    e_bbox = fb.getbbox(segment)
-                    e_w = e_bbox[2] - e_bbox[0]
-                    e_h = e_bbox[3] - e_bbox[1]
-                    e_img = Image.new("RGBA", (e_w + 4, e_h + 4), (0, 0, 0, 0))
-                    e_draw = ImageDraw.Draw(e_img)
-                    e_draw.text((-e_bbox[0], -e_bbox[1]), segment, fill=fill, font=fb, embedded_color=True)
-                    paste_y = int(y + (font.size - e_h) // 2)
-                    canvas.paste(e_img, (int(x + cx), paste_y), e_img)
-                    cx += e_w + 2
-                else:
-                    kwargs = {"embedded_color": True} if use_color else {}
-                    draw.text((x + cx, y), segment, fill=fill, font=fb, **kwargs)
-                    cx += fb.getlength(segment)
-                i = j
-            else:
-                # 全部回退字体都没有 -> 用主字体画豆腐块
-                draw.text((x + cx, y), ch, fill=fill, font=font)
-                cx += font.getlength(ch)
-                i += 1
+            draw.text((x + cx, y), ch, fill=fill, font=fc.main)
+            cx += fc.main.getlength(ch)
+            i += 1
     return cx
 
 
 def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     """加载字体，优先使用 assets 目录下的 LXGW 文楷等宽"""
-    if _BUNDLED_FONT.exists():
+    if _MAIN_FONT_PATH.exists():
         try:
-            return ImageFont.truetype(str(_BUNDLED_FONT), size)
+            return ImageFont.truetype(str(_MAIN_FONT_PATH), size)
         except Exception:
             pass
 
@@ -330,122 +382,250 @@ def _load_emote(url: str, size: int) -> Image.Image | None:
         return None
 
 
-def _parse_message_segments(message: str, emotes: dict[str, EmoteInfo]) -> list[tuple[str, str | EmoteInfo]]:
-    """将评论消息解析为文本和表情段落列表
-
-    Returns:
-        list of ('text', str) or ('emote', EmoteInfo)
-    """
+def _split_by_emotes(message: str, emotes: dict[str, EmoteInfo]) -> list[Segment]:
+    """按 B 站表情包切分消息"""
     if not emotes:
-        return [('text', message)]
+        return [(SEG_TEXT, message)]
 
-    # 按长度降序排列，避免匹配到短前缀
     sorted_keys = sorted(emotes.keys(), key=len, reverse=True)
     pattern = '|'.join(re.escape(key) for key in sorted_keys)
 
-    segments: list[tuple[str, str | EmoteInfo]] = []
+    segments: list[Segment] = []
     last_end = 0
     for match in re.finditer(pattern, message):
         if match.start() > last_end:
-            segments.append(('text', message[last_end:match.start()]))
-        emote_key = match.group()
-        segments.append(('emote', emotes[emote_key]))
+            segments.append((SEG_TEXT, message[last_end:match.start()]))
+        segments.append((SEG_EMOTE, emotes[match.group()]))
         last_end = match.end()
     if last_end < len(message):
-        segments.append(('text', message[last_end:]))
+        segments.append((SEG_TEXT, message[last_end:]))
 
-    return segments if segments else [('text', message)]
+    return segments if segments else [(SEG_TEXT, message)]
+
+
+def _split_by_links(
+    segments: list[Segment],
+    at_names: dict[str, int] | None,
+    jump_urls: dict[str, JumpUrlInfo] | None = None,
+) -> list[Segment]:
+    """在 text 段落中识别 @提及、URL 和 jump_url 关键词，标记为 link"""
+    parts: list[str] = []
+    if at_names:
+        sorted_names = sorted(at_names.keys(), key=len, reverse=True)
+        parts.append('(?:' + '|'.join(re.escape(f'@{n}') for n in sorted_names) + ')')
+    parts.append(r'https?://[^\s\u3000<>\[\]\u300c\u300d\u3010\u3011\uff09)]+')
+    combined = re.compile('|'.join(parts))
+
+    result: list[Segment] = []
+    for seg_type, seg_data in segments:
+        if seg_type != SEG_TEXT:
+            result.append((seg_type, seg_data))
+            continue
+        last_end = 0
+        found = False
+        for match in combined.finditer(seg_data):
+            found = True
+            if match.start() > last_end:
+                result.append((SEG_TEXT, seg_data[last_end:match.start()]))
+            raw = match.group()
+            # 查找 jump_url 信息
+            jinfo = jump_urls.get(raw) if jump_urls else None
+            if jinfo:
+                result.append((SEG_LINK, LinkInfo(raw, jinfo.title, jinfo.prefix_icon)))
+            else:
+                result.append((SEG_LINK, LinkInfo(raw)))
+            last_end = match.end()
+        if last_end < len(seg_data):
+            result.append((SEG_TEXT, seg_data[last_end:]))
+        elif not found:
+            result.append((SEG_TEXT, seg_data))
+    return result
+
+
+def _split_by_emoji(segments: list[Segment]) -> list[Segment]:
+    """在 text 段落中识别 emoji 序列，并去除肤色修饰符"""
+    result: list[Segment] = []
+    for seg_type, seg_data in segments:
+        if seg_type != SEG_TEXT:
+            result.append((seg_type, seg_data))
+            continue
+        last_end = 0
+        found = False
+        for match in _EMOJI_RE.finditer(seg_data):
+            found = True
+            if match.start() > last_end:
+                result.append((SEG_TEXT, seg_data[last_end:match.start()]))
+            # 去除肤色修饰符，渲染默认黄皮肤 emoji
+            emoji_text = _SKIN_TONE_RE.sub('', match.group())
+            if emoji_text:
+                result.append((SEG_EMOJI, emoji_text))
+            last_end = match.end()
+        if last_end < len(seg_data):
+            result.append((SEG_TEXT, seg_data[last_end:]))
+        elif not found:
+            result.append((SEG_TEXT, seg_data))
+    return result
+
+
+def _split_by_font_coverage(segments: list[Segment], main_font: ImageFont.FreeTypeFont) -> list[Segment]:
+    """将 text 段落中主字体无法渲染的字符标记为 unicode"""
+    result: list[Segment] = []
+    for seg_type, seg_data in segments:
+        if seg_type != SEG_TEXT:
+            result.append((seg_type, seg_data))
+            continue
+        cur_type = None
+        cur_text = ""
+        for ch in seg_data:
+            ch_type = SEG_UNICODE if ord(ch) > 127 and _is_tofu(ch, main_font) else SEG_TEXT
+            if ch_type == cur_type:
+                cur_text += ch
+            else:
+                if cur_text:
+                    result.append((cur_type, cur_text))
+                cur_type = ch_type
+                cur_text = ch
+        if cur_text:
+            result.append((cur_type, cur_text))
+    return result
+
+
+def _parse_message_segments(
+    message: str,
+    emotes: dict[str, EmoteInfo],
+    at_names: dict[str, int] | None = None,
+    jump_urls: dict[str, JumpUrlInfo] | None = None,
+    font_config: FontConfig | None = None,
+) -> list[Segment]:
+    """将评论消息解析为 text / link / emote / emoji / unicode 段落列表"""
+    segments = _split_by_emotes(message, emotes)
+    segments = _split_by_links(segments, at_names, jump_urls)
+    segments = _split_by_emoji(segments)
+    if font_config:
+        segments = _split_by_font_coverage(segments, font_config.main)
+    return segments
 
 
 def _wrap_message_segments(
-    segments: list[tuple[str, str | EmoteInfo]],
-    font: ImageFont.FreeTypeFont,
+    segments: list[Segment],
+    font_config: FontConfig,
     max_width: int,
     max_lines: int = 6,
     emote_size: int = 30,
-) -> list[list[tuple[str, str | EmoteInfo]]]:
-    """将混合文本+表情段落列表按宽度换行
-
-    Returns:
-        list of lines, each line is a list of ('text', str) or ('emote', EmoteInfo)
-    """
-    lines: list[list[tuple[str, str | EmoteInfo]]] = []
-    current_line: list[tuple[str, str | EmoteInfo]] = []
+) -> list[list[Segment]]:
+    """将混合段落列表按宽度换行"""
+    lines: list[list[Segment]] = []
+    current_line: list[Segment] = []
     current_width = 0.0
 
+    def _flush_line():
+        nonlocal current_line, current_width
+        lines.append(current_line)
+        current_line = []
+        current_width = 0.0
+
     for seg_type, seg_data in segments:
-        if seg_type == 'emote':
-            emote_w = emote_size + 2
-            if current_width + emote_w > max_width and current_line:
-                lines.append(current_line)
+        if seg_type == SEG_EMOTE:
+            w = emote_size + 2
+            if current_width + w > max_width and current_line:
+                _flush_line()
                 if len(lines) >= max_lines:
                     return lines
-                current_line = []
-                current_width = 0.0
-            current_line.append(('emote', seg_data))
-            current_width += emote_w
-        else:  # text
+            current_line.append((SEG_EMOTE, seg_data))
+            current_width += w
+        elif seg_type == SEG_EMOJI:
+            w = font_config.emoji.getlength(seg_data)
+            if current_width + w > max_width and current_line:
+                _flush_line()
+                if len(lines) >= max_lines:
+                    return lines
+            current_line.append((SEG_EMOJI, seg_data))
+            current_width += w
+        elif seg_type == SEG_LINK:
+            # LinkInfo: 整体放入当前行
+            link_info = seg_data
+            link_text = link_info.title
+            link_w = font_config.main.getlength(link_text)
+            if current_width + link_w > max_width and current_line:
+                _flush_line()
+                if len(lines) >= max_lines:
+                    return lines
+            current_line.append((SEG_LINK, link_info))
+            current_width += link_w
+        else:  # SEG_TEXT, SEG_UNICODE
+            font = font_config.fallback if seg_type == SEG_UNICODE else font_config.main
             for ch in seg_data:
                 if ch == '\n':
-                    lines.append(current_line)
-                    current_line = []
-                    current_width = 0.0
+                    _flush_line()
                     if len(lines) >= max_lines:
                         return lines
                     continue
-                ch_width = font.getlength(ch)
-                if current_width + ch_width > max_width and current_line:
-                    lines.append(current_line)
+                ch_w = font.getlength(ch)
+                if current_width + ch_w > max_width and current_line:
+                    _flush_line()
                     if len(lines) >= max_lines:
                         return lines
-                    current_line = []
-                    current_width = 0.0
-                # 追加字符到当前行最后一个文本段，或新建文本段
-                if current_line and current_line[-1][0] == 'text':
-                    current_line[-1] = ('text', current_line[-1][1] + ch)
+                if current_line and current_line[-1][0] == seg_type:
+                    current_line[-1] = (seg_type, current_line[-1][1] + ch)
                 else:
-                    current_line.append(('text', ch))
-                current_width += ch_width
+                    current_line.append((seg_type, ch))
+                current_width += ch_w
 
     if current_line:
         if len(lines) < max_lines:
             lines.append(current_line)
 
-    return lines if lines else [[('text', '')]]
+    return lines if lines else [[(SEG_TEXT, '')]]
 
 
 def _draw_message_with_emotes(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
-    wrapped_lines: list[list[tuple[str, str | EmoteInfo]]],
+    wrapped_lines: list[list[Segment]],
     x: int,
     y: int,
-    font: ImageFont.FreeTypeFont,
+    font_config: FontConfig,
     line_height: int,
     emote_size: int,
     text_color: tuple | None = None,
 ) -> int:
     """绘制包含表情包的消息文本，返回占用的总高度"""
     if text_color is None:
-        text_color = (34, 34, 34)  # COLOR_MESSAGE
+        text_color = COLOR_MESSAGE
     total_h = 0
     for line_segments in wrapped_lines:
         cx = x
         for seg_type, seg_data in line_segments:
-            if seg_type == 'text':
-                tw = _draw_text_with_fallback(draw, (cx, y), seg_data, fill=text_color, font=font, canvas=canvas)
-                cx += int(tw)
-            elif seg_type == 'emote':
+            if seg_type == SEG_TEXT:
+                draw.text((cx, y), seg_data, fill=text_color, font=font_config.main)
+                cx += int(font_config.main.getlength(seg_data))
+            elif seg_type == SEG_LINK:
+                link_info = seg_data
+                # 绘制前缀图标
+                if link_info.prefix_icon:
+                    icon_size = line_height - 4
+                    icon_img = _load_emote(link_info.prefix_icon, icon_size)
+                    if icon_img:
+                        icon_y = y
+                        canvas.paste(icon_img, (int(cx), int(icon_y)), icon_img)
+                        cx += icon_size
+                draw.text((cx, y), link_info.title, fill=COLOR_LINK, font=font_config.main)
+                cx += int(font_config.main.getlength(link_info.title))
+            elif seg_type == SEG_EMOJI:
+                draw.text((cx, y+6), seg_data, fill=text_color, font=font_config.emoji, embedded_color=True)
+                cx += int(font_config.emoji.getlength(seg_data))
+            elif seg_type == SEG_UNICODE:
+                draw.text((cx, y), seg_data, fill=text_color, font=font_config.fallback)
+                cx += int(font_config.fallback.getlength(seg_data))
+            elif seg_type == SEG_EMOTE:
                 emote_img = _load_emote(seg_data.url, emote_size)
                 if emote_img:
-                    # 表情垂直居中对齐文本
                     emote_y = y + (line_height - emote_size) // 2
                     canvas.paste(emote_img, (int(cx), int(emote_y)), emote_img)
                     cx += emote_size + 2
                 else:
-                    # 加载失败时回退显示表情文字
-                    draw.text((cx, y), seg_data.text, fill=text_color, font=font)
-                    cx += int(font.getlength(seg_data.text))
+                    draw.text((cx, y), seg_data.text, fill=text_color, font=font_config.main)
+                    cx += int(font_config.main.getlength(seg_data.text))
         y += line_height
         total_h += line_height
     return total_h
@@ -1035,8 +1215,9 @@ def _measure_comment_height(comment: CommentItem, content_width: int, is_sub: bo
     # 消息行数（考虑表情包宽度）
     msg_line_h = 32 if is_sub else 34
     emote_size = msg_line_h - 2
-    segments = _parse_message_segments(comment.message, comment.emotes)
-    wrapped = _wrap_message_segments(segments, font_msg, text_width, max_lines=6, emote_size=emote_size)
+    fc = _get_font_config(int(font_msg.size))
+    segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
+    wrapped = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
     msg_h = len(wrapped) * msg_line_h
 
     # 底部 meta 行（点赞、时间等）
@@ -1129,12 +1310,13 @@ def _draw_single_comment(
     name_line_h = 30 if is_sub else 34
     y += name_line_h + 6
 
-    # ── 评论内容（支持表情包） ──
+    # ── 评论内容（支持表情包、emoji、链接） ──
     msg_line_h = 32 if is_sub else 34
     emote_size = msg_line_h - 2
-    segments = _parse_message_segments(comment.message, comment.emotes)
-    wrapped = _wrap_message_segments(segments, font_msg, text_width, max_lines=6, emote_size=emote_size)
-    msg_h = _draw_message_with_emotes(canvas, draw, wrapped, text_x, y, font_msg, msg_line_h, emote_size)
+    fc = _get_font_config(int(font_msg.size))
+    segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
+    wrapped = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
+    msg_h = _draw_message_with_emotes(canvas, draw, wrapped, text_x, y, fc, msg_line_h, emote_size)
     y += msg_h
 
     # ── 评论配图 ──

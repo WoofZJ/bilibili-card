@@ -10,6 +10,12 @@ class EmoteInfo(BaseModel):
     size: int = 1  # 1=小表情(行内), 2=大表情
 
 
+class JumpUrlInfo(BaseModel):
+    """jump_url 信息（链接/搜索词的展示信息）"""
+    title: str = ""  # 显示标题
+    prefix_icon: str = ""  # 前缀图标 URL
+
+
 class PictureInfo(BaseModel):
     """评论配图信息"""
     img_src: str  # 图片URL
@@ -36,6 +42,8 @@ class CommentItem(BaseModel):
     contract_desc: str = ""  # 粉丝描述
     rcount: int = 0  # 回复数量
     emotes: dict[str, EmoteInfo] = {}  # 表情包映射 {"[doge]": EmoteInfo}
+    at_names: dict[str, int] = {}  # @提及映射 {"用户名": mid}
+    jump_urls: dict[str, JumpUrlInfo] = {}  # jump_url 映射 {"文本/URL": JumpUrlInfo}
     pictures: list[PictureInfo] = []  # 评论配图列表
     sub_replies: list["CommentItem"] = []  # 子评论
 
@@ -66,6 +74,23 @@ class CommentItem(BaseModel):
                     size=val.get("meta", {}).get("size", 1),
                 )
 
+        # 解析 @提及
+        at_names = {}
+        at_name_data = content.get("at_name_to_mid", {}) or {}
+        for name, mid_val in at_name_data.items():
+            at_names[name] = int(mid_val) if isinstance(mid_val, str) else mid_val
+
+        # 解析 jump_url
+        jump_urls = {}
+        jump_url_data = content.get("jump_url", {}) or {}
+        for key, val in jump_url_data.items():
+            title = val.get("title", "")
+            if title:
+                jump_urls[key] = JumpUrlInfo(
+                    title=title,
+                    prefix_icon=val.get("prefix_icon", ""),
+                )
+
         # 解析评论配图
         pictures = []
         pic_data = content.get("pictures", []) or []
@@ -94,6 +119,8 @@ class CommentItem(BaseModel):
             contract_desc=member.get("contract_desc", ""),
             rcount=reply.get("rcount", 0),
             emotes=emotes,
+            at_names=at_names,
+            jump_urls=jump_urls,
             pictures=pictures,
             sub_replies=sub_replies,
         )
