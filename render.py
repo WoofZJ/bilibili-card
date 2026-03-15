@@ -44,6 +44,8 @@ COLOR_STAT_VALUE = (51, 51, 51)
 COLOR_DURATION_BG = (0, 0, 0, 180)
 COLOR_DURATION_TEXT = (255, 255, 255)
 COLOR_DIVIDER = (240, 240, 240)
+COLOR_OVERFLOW = (120, 120, 120)
+COLOR_LINK = (0x00, 0x6B, 0xDE) # 链接颜色
 
 # ── 字体加载 ─────────────────────────────────────
 _ASSETS_DIR = Path(__file__).parent / "assets"
@@ -150,8 +152,6 @@ class LinkInfo:
 
 Segment = tuple[str, str | EmoteInfo | LinkInfo]
 
-# 链接颜色
-COLOR_LINK = (0x00, 0x6B, 0xDE)
 
 # 肌肤色修饰符正则：用于去除 emoji 肤色
 _SKIN_TONE_RE = re.compile('[\U0001F3FB-\U0001F3FF]')
@@ -512,7 +512,7 @@ def _wrap_message_segments(
     max_width: int,
     max_lines: int = 6,
     emote_size: int = 30,
-) -> list[list[Segment]]:
+) -> tuple[list[list[Segment]], int]:
     """将混合段落列表按宽度换行"""
     lines: list[list[Segment]] = []
     current_line: list[Segment] = []
@@ -523,14 +523,25 @@ def _wrap_message_segments(
         lines.append(current_line)
         current_line = []
         current_width = 0.0
+    
+    def _remaing_chars_count(idx):
+        count = 0
+        for seg_type, seg_data in segments[idx:]:
+            if seg_type == SEG_EMOTE or seg_type == SEG_EMOJI:
+                count += 1
+            elif seg_type == SEG_LINK:
+                count += 1
+            else:
+                count += len(seg_data)
+        return count
 
-    for seg_type, seg_data in segments:
+    for idx, (seg_type, seg_data) in enumerate(segments):
         if seg_type == SEG_EMOTE:
             w = emote_size + 2
             if current_width + w > max_width and current_line:
                 _flush_line()
                 if len(lines) >= max_lines:
-                    return lines
+                    return lines, _remaing_chars_count(idx)
             current_line.append((SEG_EMOTE, seg_data))
             current_width += w
         elif seg_type == SEG_EMOJI:
@@ -538,7 +549,7 @@ def _wrap_message_segments(
             if current_width + w > max_width and current_line:
                 _flush_line()
                 if len(lines) >= max_lines:
-                    return lines
+                    return lines, _remaing_chars_count(idx)
             current_line.append((SEG_EMOJI, seg_data))
             current_width += w
         elif seg_type == SEG_LINK:
@@ -549,7 +560,7 @@ def _wrap_message_segments(
             if current_width + link_w > max_width and current_line:
                 _flush_line()
                 if len(lines) >= max_lines:
-                    return lines
+                    return lines, _remaing_chars_count(idx)
             current_line.append((SEG_LINK, link_info))
             current_width += link_w
         else:  # SEG_TEXT, SEG_UNICODE
@@ -558,13 +569,13 @@ def _wrap_message_segments(
                 if ch == '\n':
                     _flush_line()
                     if len(lines) >= max_lines:
-                        return lines
+                        return lines, _remaing_chars_count(idx)
                     continue
                 ch_w = font.getlength(ch)
                 if current_width + ch_w > max_width and current_line:
                     _flush_line()
                     if len(lines) >= max_lines:
-                        return lines
+                        return lines, _remaing_chars_count(idx)
                 if current_line and current_line[-1][0] == seg_type:
                     current_line[-1] = (seg_type, current_line[-1][1] + ch)
                 else:
@@ -575,7 +586,7 @@ def _wrap_message_segments(
         if len(lines) < max_lines:
             lines.append(current_line)
 
-    return lines if lines else [[(SEG_TEXT, '')]]
+    return (lines, 0) if lines else ([[(SEG_TEXT, '')]], 0)
 
 
 def _draw_message_with_emotes(
@@ -1217,8 +1228,8 @@ def _measure_comment_height(comment: CommentItem, content_width: int, is_sub: bo
     emote_size = msg_line_h - 2
     fc = _get_font_config(int(font_msg.size))
     segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
-    wrapped = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
-    msg_h = len(wrapped) * msg_line_h
+    wrapped, overflow_count = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
+    msg_h = (len(wrapped) + (1 if overflow_count > 0 else 0)) * msg_line_h
 
     # 底部 meta 行（点赞、时间等）
     meta_h = 28 if is_sub else 30
@@ -1315,9 +1326,13 @@ def _draw_single_comment(
     emote_size = msg_line_h - 2
     fc = _get_font_config(int(font_msg.size))
     segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
-    wrapped = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
+    wrapped, overflow_count = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
     msg_h = _draw_message_with_emotes(canvas, draw, wrapped, text_x, y, fc, msg_line_h, emote_size)
     y += msg_h
+    if overflow_count > 0:
+        overflow_text = f"...（省略 {overflow_count} 字符）"
+        draw.text((text_x, y), overflow_text, fill=COLOR_OVERFLOW, font=font_msg)
+        y += msg_line_h
 
     # ── 评论配图 ──
     if comment.pictures and not is_sub:
