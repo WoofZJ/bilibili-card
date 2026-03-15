@@ -34,6 +34,7 @@ CARD_BG = (255, 255, 255)
 CARD_RADIUS = 0
 SHADOW_COLOR = (0, 0, 0, 40)
 AVATAR_SIZE = 60
+EMOJI_TEXT_OFFSET = 6
 
 COLOR_TITLE = (30, 30, 30)
 COLOR_SUB = (102, 102, 102)
@@ -136,6 +137,7 @@ _EMOJI_RE = re.compile(
 # ── 段落类型常量 ──
 SEG_TEXT = 'text'        # 普通文字（主字体）
 SEG_LINK = 'link'        # @提及 或 URL（主字体，蓝色）
+SEG_LINK_TEXT = 'link_text'  # 链接文本（主字体，蓝色）
 SEG_EMOTE = 'emote'      # B 站表情包（图片）
 SEG_EMOJI = 'emoji'      # Unicode emoji（emoji 字体）
 SEG_UNICODE = 'unicode'  # 其他主字体缺失的符号（回退字体）
@@ -177,7 +179,7 @@ def _draw_text_with_fallback(
             seg = text[last_end:match.start()]
             cx += _draw_plain_text(draw, (x + cx, y), seg, fill, fc)
         emoji_text = match.group()
-        draw.text((x + cx, y+6), emoji_text, fill=fill, font=fc.emoji, embedded_color=True)
+        draw.text((x + cx, y+EMOJI_TEXT_OFFSET), emoji_text, fill=fill, font=fc.emoji, embedded_color=True)
         cx += fc.emoji.getlength(emoji_text)
         last_end = match.end()
 
@@ -517,6 +519,15 @@ def _wrap_message_segments(
     lines: list[list[Segment]] = []
     current_line: list[Segment] = []
     current_width = 0.0
+    mapped_segments = []
+    for segment in segments:
+        if segment[0] == SEG_LINK:
+            link_info = segment[1]
+            if link_info.prefix_icon:
+                mapped_segments.append((SEG_EMOTE, EmoteInfo(text="url", url=link_info.prefix_icon)))
+            mapped_segments.append((SEG_LINK_TEXT, link_info.title))
+        else:
+            mapped_segments.append(segment)
 
     def _flush_line():
         nonlocal current_line, current_width
@@ -524,18 +535,18 @@ def _wrap_message_segments(
         current_line = []
         current_width = 0.0
     
-    def _remaing_chars_count(idx):
-        count = 0
+    def _remaing_chars_count(idx, text_discount=0):
+        count = - text_discount
         for seg_type, seg_data in segments[idx:]:
             if seg_type == SEG_EMOTE or seg_type == SEG_EMOJI:
                 count += 1
-            elif seg_type == SEG_LINK:
-                count += 1
+            elif seg_type == SEG_LINK_TEXT:
+                count += len(seg_data)
             else:
                 count += len(seg_data)
         return count
 
-    for idx, (seg_type, seg_data) in enumerate(segments):
+    for idx, (seg_type, seg_data) in enumerate(mapped_segments):
         if seg_type == SEG_EMOTE:
             w = emote_size + 2
             if current_width + w > max_width and current_line:
@@ -552,30 +563,19 @@ def _wrap_message_segments(
                     return lines, _remaing_chars_count(idx)
             current_line.append((SEG_EMOJI, seg_data))
             current_width += w
-        elif seg_type == SEG_LINK:
-            # LinkInfo: 整体放入当前行
-            link_info = seg_data
-            link_text = link_info.title
-            link_w = font_config.main.getlength(link_text)
-            if current_width + link_w > max_width and current_line:
-                _flush_line()
-                if len(lines) >= max_lines:
-                    return lines, _remaing_chars_count(idx)
-            current_line.append((SEG_LINK, link_info))
-            current_width += link_w
-        else:  # SEG_TEXT, SEG_UNICODE
+        else:  # SEG_TEXT, SEG_UNICODE, SEG_LINK_TEXT
             font = font_config.fallback if seg_type == SEG_UNICODE else font_config.main
-            for ch in seg_data:
+            for i, ch in enumerate(seg_data):
                 if ch == '\n':
                     _flush_line()
                     if len(lines) >= max_lines:
-                        return lines, _remaing_chars_count(idx)
+                        return lines, _remaing_chars_count(idx, len(seg_data) - i)
                     continue
                 ch_w = font.getlength(ch)
                 if current_width + ch_w > max_width and current_line:
                     _flush_line()
                     if len(lines) >= max_lines:
-                        return lines, _remaing_chars_count(idx)
+                        return lines, _remaing_chars_count(idx, len(seg_data) - i)
                 if current_line and current_line[-1][0] == seg_type:
                     current_line[-1] = (seg_type, current_line[-1][1] + ch)
                 else:
@@ -607,35 +607,33 @@ def _draw_message_with_emotes(
     for line_segments in wrapped_lines:
         cx = x
         for seg_type, seg_data in line_segments:
-            if seg_type == SEG_TEXT:
-                draw.text((cx, y), seg_data, fill=text_color, font=font_config.main)
+            if seg_type == SEG_TEXT or seg_type == SEG_LINK_TEXT:
+                color = COLOR_LINK if seg_type == SEG_LINK_TEXT else text_color
+                text_y = y + (line_height - font_config.main.size) // 2
+                draw.text((cx, text_y), seg_data, fill=color, font=font_config.main)
                 cx += int(font_config.main.getlength(seg_data))
             elif seg_type == SEG_LINK:
-                link_info = seg_data
-                # 绘制前缀图标
-                if link_info.prefix_icon:
-                    icon_size = line_height - 4
-                    icon_img = _load_emote(link_info.prefix_icon, icon_size)
-                    if icon_img:
-                        icon_y = y
-                        canvas.paste(icon_img, (int(cx), int(icon_y)), icon_img)
-                        cx += icon_size
-                draw.text((cx, y), link_info.title, fill=COLOR_LINK, font=font_config.main)
-                cx += int(font_config.main.getlength(link_info.title))
+                link_text = seg_data
+                text_y = y + (line_height - font_config.main.size) // 2
+                draw.text((cx, text_y), link_text, fill=COLOR_LINK, font=font_config.main)
+                cx += int(font_config.main.getlength(link_text))
             elif seg_type == SEG_EMOJI:
-                draw.text((cx, y+6), seg_data, fill=text_color, font=font_config.emoji, embedded_color=True)
+                emoji_y = y + (line_height - font_config.emoji.size) // 2 + EMOJI_TEXT_OFFSET
+                draw.text((cx, emoji_y), seg_data, fill=text_color, font=font_config.emoji, embedded_color=True)
                 cx += int(font_config.emoji.getlength(seg_data))
             elif seg_type == SEG_UNICODE:
-                draw.text((cx, y), seg_data, fill=text_color, font=font_config.fallback)
+                unicode_y = y + (line_height - font_config.fallback.size) // 2
+                draw.text((cx, unicode_y), seg_data, fill=text_color, font=font_config.fallback)
                 cx += int(font_config.fallback.getlength(seg_data))
             elif seg_type == SEG_EMOTE:
                 emote_img = _load_emote(seg_data.url, emote_size)
                 if emote_img:
                     emote_y = y + (line_height - emote_size) // 2
                     canvas.paste(emote_img, (int(cx), int(emote_y)), emote_img)
-                    cx += emote_size + 2
+                    cx += emote_size + 1
                 else:
-                    draw.text((cx, y), seg_data.text, fill=text_color, font=font_config.main)
+                    text_y = y + (line_height - font_config.main.size) // 2
+                    draw.text((cx, text_y), seg_data.text, fill=text_color, font=font_config.main)
                     cx += int(font_config.main.getlength(seg_data.text))
         y += line_height
         total_h += line_height
@@ -1217,14 +1215,14 @@ def _measure_comment_height(comment: CommentItem, content_width: int, is_sub: bo
     avatar_size = COMMENT_SUB_AVATAR_SIZE if is_sub else COMMENT_AVATAR_SIZE
 
     # 用户名行高度
-    name_line_h = 30 if is_sub else 34
+    name_line_h = 28 if is_sub else 30
 
     # 消息文本区域宽度
     text_left = avatar_size + 12
     text_width = content_width - text_left
 
     # 消息行数（考虑表情包宽度）
-    msg_line_h = 32 if is_sub else 34
+    msg_line_h = 30 if is_sub else 32
     emote_size = msg_line_h - 2
     fc = _get_font_config(int(font_msg.size))
     segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
@@ -1318,11 +1316,11 @@ def _draw_single_comment(
         w = _draw_small_badge(draw, badge_x, level_y, comment.contract_desc, COLOR_CONTRACTOR_BG, COLOR_CONTRACTOR_TEXT)
         badge_x += w + 6
 
-    name_line_h = 30 if is_sub else 34
+    name_line_h = 28 if is_sub else 30
     y += name_line_h + 6
 
     # ── 评论内容（支持表情包、emoji、链接） ──
-    msg_line_h = 32 if is_sub else 34
+    msg_line_h = 30 if is_sub else 32
     emote_size = msg_line_h - 2
     fc = _get_font_config(int(font_msg.size))
     segments = _parse_message_segments(comment.message, comment.emotes, comment.at_names, comment.jump_urls, fc)
@@ -1331,7 +1329,8 @@ def _draw_single_comment(
     y += msg_h
     if overflow_count > 0:
         overflow_text = f"...（省略 {overflow_count} 字符）"
-        draw.text((text_x, y), overflow_text, fill=COLOR_OVERFLOW, font=font_msg)
+        text_y = y + (msg_line_h - font_msg.size) / 2
+        draw.text((text_x, text_y), overflow_text, fill=COLOR_OVERFLOW, font=font_msg)
         y += msg_line_h
 
     # ── 评论配图 ──
