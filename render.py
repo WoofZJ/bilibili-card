@@ -1010,8 +1010,8 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     content_width = CARD_WIDTH - PADDING * 2
 
     # ── 预计算文字行数确定卡片高度 ──
-    title_lines = _wrap_text(video.title, FONT_TITLE, content_width)
-    title_line_height = 52
+    title_lines = _wrap_text(video.title, FONT_TITLE, content_width, max_lines=5)
+    title_line_height = 48
     title_height = len(title_lines) * title_line_height
 
     total_height = CARD_HEIGHT - (2-len(title_lines))*title_line_height
