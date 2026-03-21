@@ -1,37 +1,18 @@
-"""
-视频信息卡片渲染器 - 使用 Pillow 将 VideoInfo 渲染为精美的卡片图片
-
-卡片布局:
-┌─────────────────────────────────┐
-│          封面图 (16:9)           │
-│       右下角: 时长标签            │
-├─────────────────────────────────┤
-│  标题 (加粗, 最多两行)           │
-│  [头像] UP主: xxx    分辨率标签   │
-│  发布时间: xxxx-xx-xx            │
-├─────────────────────────────────┤
-│  截止于 xxxx-xx-xx xx:xx 的数据   │
-│  👁 播放  👍 点赞  🪙 投币       │
-│  ⭐ 收藏  💬 弹幕  ↗ 转发  💬 评论│
-└─────────────────────────────────┘
-"""
-
 import io
 import re
 import random
-import platform
+from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
-CARD_HEIGHT = 860
+CARD_HEIGHT_BASE = 738
 COVER_HEIGHT = 450  # 800 / 16 * 9
 PADDING = 16
 LINE_GAP = 10
 CARD_BG = (255, 255, 255)
-CARD_RADIUS = 0
 SHADOW_COLOR = (0, 0, 0, 40)
 AVATAR_SIZE = 60
 EMOJI_TEXT_OFFSET = 6
@@ -1009,44 +990,28 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     """
     content_width = CARD_WIDTH - PADDING * 2
 
-    # ── 预计算文字行数确定卡片高度 ──
     title_lines = _wrap_text(video.title, FONT_TITLE, content_width, max_lines=5)
     title_line_height = 48
     title_height = len(title_lines) * title_line_height
+    total_height = CARD_HEIGHT_BASE + title_height
 
-    total_height = CARD_HEIGHT - (2-len(title_lines))*title_line_height
-
-    # ── 创建画布 ──
     canvas = Image.new("RGBA", (CARD_WIDTH, total_height), (0, 0, 0, 0))
-    # 卡片背景
-    card_draw = ImageDraw.Draw(canvas)
-    _rounded_rectangle(card_draw, (0, 0, CARD_WIDTH, total_height), CARD_RADIUS, (255, 255, 255, 255))
 
-    # 在卡片上绘制内容
+    # fill background
     draw = ImageDraw.Draw(canvas)
+    draw.rectangle((0, 0, CARD_WIDTH, total_height), fill=(255, 255, 255))
 
-    # ── 封面 ──
+    # draw cover
     if download_cover and video.cover:
         cover = _load_cover(video.cover)
+        if danmaku_list:
+            cover = _draw_danmaku_on_cover(cover, danmaku_list)
     else:
-        cover = None
-
-    if cover is None:
         cover = _create_placeholder_cover()
-
-    # 在封面上绘制弹幕
-    if danmaku_list:
-        cover = _draw_danmaku_on_cover(cover, danmaku_list)
-
-    # 封面圆角遮罩（上方两个角）
-    cover_mask = Image.new("L", (CARD_WIDTH, COVER_HEIGHT), 0)
-    mask_draw = ImageDraw.Draw(cover_mask)
-    mask_draw.rounded_rectangle((0, 0, CARD_WIDTH, COVER_HEIGHT + CARD_RADIUS), CARD_RADIUS, fill=255)
     cover_rgba = cover.convert("RGBA")
-    # 用遮罩粘贴
-    canvas.paste(cover_rgba, (0, 0), cover_mask)
+    canvas.paste(cover_rgba, (0, 0), cover_rgba)
 
-    # ── 封面上的时长标签 ──
+    # draw duration
     dur_text = video.duration_str
     dur_bbox = FONT_DURATION.getbbox(dur_text)
     dur_tw = dur_bbox[2] - dur_bbox[0]
@@ -1054,63 +1019,52 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     dur_pad_x, dur_pad_y = 12, 6
     dur_x = CARD_WIDTH - dur_tw - dur_pad_x * 2 - 16
     dur_y = COVER_HEIGHT - dur_th - dur_pad_y * 2 - 16
-    # 半透明背景
     dur_overlay = Image.new("RGBA", (dur_tw + dur_pad_x * 2, dur_th + dur_pad_y * 2), (0, 0, 0, 0))
     dur_draw = ImageDraw.Draw(dur_overlay)
-    _rounded_rectangle(dur_draw, (0, 0, dur_tw + dur_pad_x * 2, dur_th + dur_pad_y * 2), 4, (0, 0, 0, 180))
+    dur_draw.rectangle((0, 0, dur_tw + dur_pad_x * 2, dur_th + dur_pad_y * 2), fill=(0, 0, 0, 180))
     canvas.paste(dur_overlay, (dur_x, dur_y), dur_overlay)
     draw.text((dur_x + dur_pad_x, dur_y + dur_pad_y - 5), dur_text, fill=COLOR_DURATION_TEXT, font=FONT_DURATION)
 
-    # ── 标题 ──
-    y_cursor = COVER_HEIGHT + PADDING
+    # draw title
+    y_cursor = COVER_HEIGHT + LINE_GAP
     for line in title_lines:
         _draw_text_with_fallback(draw, (PADDING, y_cursor), line, fill=COLOR_TITLE, font=FONT_TITLE, canvas=canvas)
         y_cursor += title_line_height
 
     y_cursor += LINE_GAP
 
-    # ── UP主头像 + 名字 + 分辨率标签 ──
-    avatar_sz = AVATAR_SIZE
+    # draw author
+    # author face
     if download_cover and video.author_face:
-        avatar = _load_avatar(video.author_face, avatar_sz)
+        avatar = _load_avatar(video.author_face, AVATAR_SIZE)
     else:
-        avatar = None
-    if avatar is None:
-        avatar = _create_placeholder_avatar(avatar_sz)
-
-    # 粘贴圆形头像
+        avatar = _create_placeholder_avatar(AVATAR_SIZE)
     canvas.paste(avatar, (PADDING, y_cursor), avatar)
-
-    # 文字垂直居中到头像
+    # author name
     author_text = video.author_name
-    text_y = y_cursor + (avatar_sz - 30) // 2
-    draw.text((PADDING + avatar_sz + 12, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
+    text_y = y_cursor + (AVATAR_SIZE - FONT_BODY.size) // 2
+    draw.text((PADDING + AVATAR_SIZE + PADDING, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
+    _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, AVATAR_SIZE - 10)
+    y_cursor += AVATAR_SIZE + LINE_GAP
 
-
-    _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, avatar_sz - 10)
-    y_cursor += avatar_sz + LINE_GAP
-
-    # ── 发布时间 + BV号 + 分辨率──
+    # draw publish time, bvid, resolution
     res_text = video.resolution_str
     time_text = f"发布于 {video.publish_time_str} | {video.bvid} | 分辨率：{res_text}"
     draw.text((PADDING, y_cursor), time_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
+    y_cursor += FONT_SMALL.size + LINE_GAP + 4
 
-
-    y_cursor += 28 + PADDING
-
-    # ── 分割线 ──
+    # draw divider
     draw.line((PADDING, y_cursor, CARD_WIDTH - PADDING, y_cursor), fill=COLOR_DIVIDER, width=2)
-    y_cursor += PADDING // 2 + 4
+    y_cursor += LINE_GAP + 4
 
-    # ── 数据快照时间说明 ──
-    from datetime import datetime
+    # draw data snapshot time
     snapshot_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    snapshot_text = f"截止于 {snapshot_time} 的数据"
+    snapshot_text = f"截止于 {snapshot_time} 的数据："
     snapshot_w = FONT_SMALL.getlength(snapshot_text)
     draw.text(((CARD_WIDTH - snapshot_w) / 2, y_cursor), snapshot_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
-    y_cursor += 30 + LINE_GAP
+    y_cursor += FONT_SMALL.size + LINE_GAP
 
-    # ── 统计数据 ──
+    # draw stats
     stats = [
         ("播放", VideoInfo.format_count(video.view)),
         ("点赞", VideoInfo.format_count(video.like)),
@@ -1120,8 +1074,6 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
         ("评论", VideoInfo.format_count(video.reply)),
         ("转发", VideoInfo.format_count(video.share)),
     ]
-
-    # 均匀分布
     item_width = content_width // len(stats)
     x = PADDING
     for label, value in stats:
