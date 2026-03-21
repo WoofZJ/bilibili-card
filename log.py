@@ -12,6 +12,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -60,7 +61,7 @@ def _timestamp() -> str:
 
 
 def archive_json(category: str, name: str, data: dict) -> Path:
-    """归档 JSON 到 logs/archive/{category}/{name}_{timestamp}.json
+    """归档 JSON 到 logs/archive/{category}/{name}.json
 
     Args:
         category: 子目录名, 如 "video_info" / "comments"
@@ -69,7 +70,7 @@ def archive_json(category: str, name: str, data: dict) -> Path:
     Returns:
         写入的文件路径
     """
-    dest = _ARCHIVE_DIR / category / f"{name}_{_timestamp()}.json"
+    dest = _ARCHIVE_DIR / category / f"{name}.json"
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     logger.debug("JSON 已归档 → %s", dest)
@@ -77,7 +78,7 @@ def archive_json(category: str, name: str, data: dict) -> Path:
 
 
 def archive_image(name: str, img_bytes: bytes) -> Path:
-    """归档图片到 logs/archive/image/{name}_{timestamp}.png
+    """归档图片到 logs/archive/image/{name}.png
 
     Args:
         name: 文件名前缀, 通常为 bvid 或 bvid_comments
@@ -85,7 +86,7 @@ def archive_image(name: str, img_bytes: bytes) -> Path:
     Returns:
         写入的文件路径
     """
-    dest = _ARCHIVE_DIR / "image" / f"{name}_{_timestamp()}.png"
+    dest = _ARCHIVE_DIR / "image" / f"{name}.png"
     with open(dest, "wb") as f:
         f.write(img_bytes)
     logger.debug("图片已归档 → %s", dest)
