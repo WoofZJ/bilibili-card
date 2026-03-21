@@ -162,6 +162,12 @@ class CommentsData(BaseModel):
             top_comment=top_comment,
         )
 
+class Staff(BaseModel):
+    """UP主信息"""
+    mid: int
+    title: str
+    name: str
+    face: str
 
 class VideoInfo(BaseModel):
     """B站视频信息模型"""
@@ -190,6 +196,9 @@ class VideoInfo(BaseModel):
     # 分辨率
     width: int = 0
     height: int = 0
+
+    # 人员列表
+    staffs: list[Staff] = []
 
     @property
     def duration_str(self) -> str:
@@ -247,4 +256,5 @@ class VideoInfo(BaseModel):
             dislike=stat.get("dislike", 0),
             width=dim.get("width", 0),
             height=dim.get("height", 0),
+            staffs=[Staff(**s) for s in info.get("staff", [])]
         )
