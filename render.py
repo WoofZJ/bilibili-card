@@ -314,8 +314,8 @@ def _load_avatar(avatar_url: str, size: int = AVATAR_SIZE) -> Image.Image | None
         img = img.resize((size, size), Image.Resampling.LANCZOS)
         # 圆形遮罩
         mask = Image.new("L", (size, size), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.ellipse((0, 0, size, size), fill=255)
+        draw = ImageDraw.Draw(mask)
+        draw.circle((size//2, size//2), size//2, fill=255)
         result = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         result.paste(img, (0, 0), mask)
         return result
@@ -1056,22 +1056,25 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
         if not staff_avatar:
             staff_avatar = _create_placeholder_avatar(AVATAR_SIZE)
         staff_avatars.append(staff_avatar)
-        if len(staff_avatars) >= 4:
-            break
+    left = PADDING * 3 + AVATAR_SIZE + FONT_BODY.getlength(author_text)
     if staff_avatars:
-        left = PADDING * 3 + AVATAR_SIZE + FONT_BODY.getlength(author_text)
         draw.text((left, text_y), "+", fill=COLOR_DESC_TEXT, font=FONT_BODY)
         left += FONT_BODY.getlength("+") + PADDING
+        right_text = f"联合投稿"
+        right = FONT_BODY.getlength(right_text) + PADDING * 2
+        remain_width = CARD_WIDTH - (left + right)
+        if len(staff_avatars) > 1:
+            gap = (remain_width - AVATAR_SIZE) // (len(staff_avatars)-1)
+        else:
+            gap = 0
+        if gap > AVATAR_SIZE + PADDING:
+            gap = AVATAR_SIZE + PADDING
         for staff_avatar in staff_avatars:
             canvas.paste(staff_avatar, (int(left), y_cursor), staff_avatar)
-            left += AVATAR_SIZE
-        left += PADDING
-        if len(video.staffs) > 1 + len(staff_avatars):
-            draw.text((left, text_y), "···", fill=COLOR_DESC_TEXT, font=FONT_BODY)
-            left += FONT_BODY.getlength("···") + PADDING
-        text = f"共{len(video.staffs)}人联合投稿"
-        draw.text((left, text_y), text, fill=COLOR_DESC_TEXT, font=FONT_BODY)
-        left += FONT_BODY.getlength(text) + PADDING
+            left += gap
+        left += AVATAR_SIZE - gap + PADDING
+        draw.text((left, text_y), right_text, fill=COLOR_DESC_TEXT, font=FONT_BODY)
+        left += FONT_BODY.getlength(right_text) + PADDING
     if left > 650:
         y_cursor += AVATAR_SIZE + LINE_GAP
         _draw_logo(canvas, "assets/bilibili.png", 720, y_cursor-5, FONT_SMALL.size + 10)
