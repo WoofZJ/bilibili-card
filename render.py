@@ -1033,19 +1033,51 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
 
     y_cursor += LINE_GAP
 
-    # draw author
+    # draw staffs
     # author face
+    avatar = None
     if download_cover and video.author_face:
         avatar = _load_avatar(video.author_face, AVATAR_SIZE)
-    else:
+    if not avatar:
         avatar = _create_placeholder_avatar(AVATAR_SIZE)
     canvas.paste(avatar, (PADDING, y_cursor), avatar)
     # author name
     author_text = video.author_name
     text_y = y_cursor + (AVATAR_SIZE - FONT_BODY.size) // 2
     draw.text((PADDING + AVATAR_SIZE + PADDING, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
-    _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, AVATAR_SIZE - 10)
-    y_cursor += AVATAR_SIZE + LINE_GAP
+    # draw other staffs
+    staff_avatars = []
+    for staff in video.staffs:
+        if staff.mid == video.author_mid:
+            continue
+        staff_avatar = None
+        if download_cover and staff.face:
+            staff_avatar = _load_avatar(staff.face, AVATAR_SIZE)
+        if not staff_avatar:
+            staff_avatar = _create_placeholder_avatar(AVATAR_SIZE)
+        staff_avatars.append(staff_avatar)
+        if len(staff_avatars) >= 4:
+            break
+    if staff_avatars:
+        left = PADDING * 3 + AVATAR_SIZE + FONT_BODY.getlength(author_text)
+        draw.text((left, text_y), "+", fill=COLOR_DESC_TEXT, font=FONT_BODY)
+        left += FONT_BODY.getlength("+") + PADDING
+        for staff_avatar in staff_avatars:
+            canvas.paste(staff_avatar, (int(left), y_cursor), staff_avatar)
+            left += AVATAR_SIZE
+        left += PADDING
+        if len(video.staffs) > 1 + len(staff_avatars):
+            draw.text((left, text_y), "···", fill=COLOR_DESC_TEXT, font=FONT_BODY)
+            left += FONT_BODY.getlength("···") + PADDING
+        text = f"共{len(video.staffs)}人联合投稿"
+        draw.text((left, text_y), text, fill=COLOR_DESC_TEXT, font=FONT_BODY)
+        left += FONT_BODY.getlength(text) + PADDING
+    if left > 650:
+        y_cursor += AVATAR_SIZE + LINE_GAP
+        _draw_logo(canvas, "assets/bilibili.png", 720, y_cursor-5, FONT_SMALL.size + 10)
+    else:
+        _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, AVATAR_SIZE - 10)
+        y_cursor += AVATAR_SIZE + LINE_GAP
 
     # draw publish time, bvid, resolution
     res_text = video.resolution_str
