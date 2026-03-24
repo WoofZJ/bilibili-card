@@ -518,7 +518,7 @@ def _wrap_message_segments(
     
     def _remaing_chars_count(idx, text_discount=0):
         count = - text_discount
-        for seg_type, seg_data in segments[idx:]:
+        for seg_type, seg_data in mapped_segments[idx:]:
             if seg_type == SEG_EMOTE or seg_type == SEG_EMOJI:
                 count += 1
             elif seg_type == SEG_LINK_TEXT:
