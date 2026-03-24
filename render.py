@@ -396,7 +396,7 @@ def _split_by_links(
     if at_names:
         sorted_names = sorted(at_names.keys(), key=len, reverse=True)
         parts.append('(?:' + '|'.join(re.escape(f'@{n}') for n in sorted_names) + ')')
-    parts.append(r'https?://[^\s\u3000<>\[\]\u300c\u300d\u3010\u3011\uff09)]+')
+    parts.append(r'(https?:\/\/)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)?')
     combined = re.compile('|'.join(parts))
 
     result: list[Segment] = []
