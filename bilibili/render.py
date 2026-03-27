@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
+from bilibili.models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
