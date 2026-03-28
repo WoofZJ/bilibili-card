@@ -171,7 +171,7 @@ async def _fetch_comments(url: str) -> DouyinCommentsData:
     try:
         raw = await _run_sync(DouyinAPI.get_work_out_comment, auth, url)
         result = DouyinCommentsData.from_api(raw)
-        archive_json("douyin", "comments", url.rstrip("/").split("/")[-1], raw if isinstance(raw, dict) else {"comments": raw})
+        archive_json("douyin", "comments", url.rstrip("/").split("/")[-1].split("?")[0], raw if isinstance(raw, dict) else {"comments": raw})
         logger.info("抖音 API 请求完成: get_work_out_comment, 评论数=%d", len(result.comments))
     except HTTPException:
         raise
