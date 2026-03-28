@@ -7,8 +7,8 @@ from PIL import Image, ImageDraw, ImageFont
 from douyin.models import DouyinWorkInfo, DouyinCommentsData, DouyinCommentItem
 
 # ── 常量 ──────────────────────────────────────────
-CARD_WIDTH = 800
-CARD_HEIGHT_BASE = 680
+CARD_WIDTH = 736
+CARD_HEIGHT_BASE = 730
 COVER_HEIGHT = 450  # 800 / 16 * 9
 PADDING = 16
 LINE_GAP = 10
@@ -17,7 +17,7 @@ AVATAR_SIZE = 60
 
 COLOR_TITLE = (30, 30, 30)
 COLOR_SUB = (102, 102, 102)
-COLOR_ACCENT = (254, 44, 85)  # 抖音红
+COLOR_ACCENT = (0x16, 0x18, 0x23)
 COLOR_DESC_TEXT = (153, 153, 153)
 COLOR_STAT_LABEL = (153, 153, 153)
 COLOR_STAT_VALUE = (51, 51, 51)
@@ -30,73 +30,457 @@ _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 
 _MAIN_FONT_PATH = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
 _EMOJI_FONT_PATH = _ASSETS_DIR / "seguiemj.ttf"
-_FALLBACK_FONT_PATH = _ASSETS_DIR / "tahoma.ttf"
+_FALLBACK_FONT_PATH = _ASSETS_DIR / "unifont.otf"
 
-# ── emoji 正则 ────────────────────────────────────
-_EMOJI_PATTERN = re.compile(
-    "[\U0001F600-\U0001F64F"
+
+class FontConfig:
+    """字体配置：主字体、emoji 字体、回退字体"""
+    def __init__(self, size: int):
+        self.main = ImageFont.truetype(str(_MAIN_FONT_PATH), size)
+        try:
+            self.emoji = ImageFont.truetype(str(_EMOJI_FONT_PATH), size)
+        except (OSError, IOError):
+            self.emoji = self.main
+        try:
+            self.fallback = ImageFont.truetype(str(_FALLBACK_FONT_PATH), size)
+        except (OSError, IOError):
+            self.fallback = self.main
+
+
+_font_config_cache: dict[int, FontConfig] = {}
+
+
+def _get_font_config(size: int) -> FontConfig:
+    if size not in _font_config_cache:
+        _font_config_cache[size] = FontConfig(size)
+    return _font_config_cache[size]
+
+
+_NOTDEF_REF: dict[tuple, bytes] = {}
+
+
+def _is_tofu(char: str, font: ImageFont.FreeTypeFont) -> bool:
+    """判断字符在指定字体中是否为 .notdef (豆腐块)"""
+    key = (int(font.size), *font.getname())
+    if key not in _NOTDEF_REF:
+        _NOTDEF_REF[key] = bytes(font.getmask(chr(0xFFFE)))
+    return bytes(font.getmask(char)) == _NOTDEF_REF[key]
+
+
+# ── Emoji 正则（含 ZWJ、肤色、旗帜等完整序列）──
+_EMOJI_BASE_CHARS = (
+    "["
+    "\U0001F600-\U0001F64F"
     "\U0001F300-\U0001F5FF"
     "\U0001F680-\U0001F6FF"
-    "\U0001F1E0-\U0001F1FF"
-    "\U00002702-\U000027B0"
-    "\U0000FE00-\U0000FE0F"
     "\U0001F900-\U0001F9FF"
-    "\U0001FA00-\U0001FA6F"
-    "\U0001FA70-\U0001FAFF"
-    "\U00002600-\U000026FF"
-    "\U0000200D"
-    "\U00002B50"
-    "\U000023F0-\U000023FF"
+    "\U0001FA00-\U0001FAFF"
+    "\U00002600-\U000027BF"
     "\U0000203C\U00002049"
+    "\U00002139\U00002328"
     "\U0000231A\U0000231B"
-    "\U00002328"
     "\U000023CF"
     "\U000023E9-\U000023F3"
     "\U000023F8-\U000023FA"
-    "\U00002934\U00002935"
-    "\U000025AA\U000025AB"
-    "\U000025B6\U000025C0"
+    "\U000024C2"
+    "\U000025AA\U000025AB\U000025B6\U000025C0"
     "\U000025FB-\U000025FE"
-    "\U00002614\U00002615"
-    "\U00002648-\U00002653"
-    "\U0000267F"
-    "\U00002693"
-    "\U000026A1"
-    "\U000026AA\U000026AB"
-    "\U000026BD\U000026BE"
-    "\U000026C4\U000026C5"
-    "\U000026CE\U000026CF"
-    "\U000026D4"
-    "\U000026EA"
-    "\U000026F2\U000026F3"
-    "\U000026F5"
-    "\U000026FA"
-    "\U000026FD"
-    "\U00002702"
-    "\U00002705"
-    "\U00002708-\U0000270D"
-    "\U0000270F"
-    "\U00002712"
-    "\U00002714"
-    "\U00002716"
-    "\U0000271D"
-    "\U00002721"
-    "\U00002733\U00002734"
-    "\U00002744"
-    "\U00002747"
-    "\U0000274C"
-    "\U0000274E"
-    "\U00002753-\U00002755"
-    "\U00002757"
-    "\U00002763\U00002764"
-    "\U00002795-\U00002797"
-    "\U000027A1"
-    "\U000027B0"
-    "\U000027BF"
-    "\U0000FE0F"
-    "]+",
-    flags=re.UNICODE,
+    "\U00002934\U00002935"
+    "\U00002B05-\U00002B07"
+    "\U00002B1B\U00002B1C\U00002B50\U00002B55"
+    "\U00003030\U0000303D\U00003297\U00003299"
+    "\U0001F004\U0001F0CF"
+    "\U0001F170-\U0001F171\U0001F17E-\U0001F17F\U0001F18E"
+    "\U0001F191-\U0001F19A"
+    "\U0001F201-\U0001F202\U0001F21A\U0001F22F"
+    "\U0001F232-\U0001F23A\U0001F250-\U0001F251"
+    "]"
 )
+_EMOJI_MOD = "[\U0001F3FB-\U0001F3FF\uFE0E\uFE0F]"
+
+_EMOJI_RE = re.compile(
+    "[\U0001F1E0-\U0001F1FF]{2}"
+    "|[0-9#*]\uFE0F?\u20E3"
+    "|(?:" + _EMOJI_BASE_CHARS +
+    _EMOJI_MOD + "*"
+    "(?:\u200D" + _EMOJI_BASE_CHARS +
+    _EMOJI_MOD + "*)*)"
+)
+
+_SKIN_TONE_RE = re.compile('[\U0001F3FB-\U0001F3FF]')
+
+EMOJI_TEXT_OFFSET = 6
+
+# ── 段落类型常量 ──
+SEG_TEXT = 'text'
+SEG_EMOTE = 'emote'     # 抖音表情包（图片）
+SEG_EMOJI = 'emoji'     # Unicode emoji（emoji 字体）
+SEG_UNICODE = 'unicode'  # 主字体缺失的符号（回退字体）
+
+Segment = tuple[str, str]
+
+# ── 抖音表情包映射（名称 → 图片 URL）──
+_DOUYIN_EMOTE_MAP: dict[str, str] = {
+    "V5": "https://www.emojiall.com/images/60/douyin/clv.png",
+    "给力": "https://www.emojiall.com/images/60/douyin/clw.png",
+    "嘿哈": "https://www.emojiall.com/images/60/douyin/cm8.png",
+    "加好友": "https://www.emojiall.com/images/60/douyin/cm9.png",
+    "勾引": "https://www.emojiall.com/images/60/douyin/cmt.png",
+    "机智": "https://www.emojiall.com/images/60/douyin/cn0.png",
+    "来看我": "https://www.emojiall.com/images/60/douyin/cn1.png",
+    "灵机一动": "https://www.emojiall.com/images/60/douyin/cn2.png",
+    "困": "https://www.emojiall.com/images/60/douyin/cna.png",
+    "疑问": "https://www.emojiall.com/images/60/douyin/cnb.png",
+    "泣不成声": "https://www.emojiall.com/images/60/douyin/cnc.png",
+    "小鼓掌": "https://www.emojiall.com/images/60/douyin/cnd.png",
+    "发呆": "https://www.emojiall.com/images/60/douyin/cnf.png",
+    "吐血": "https://www.emojiall.com/images/60/douyin/cnj.png",
+    "酷拽": "https://www.emojiall.com/images/60/douyin/cnq.png",
+    "泪奔": "https://www.emojiall.com/images/60/douyin/cnv.png",
+    "抠鼻": "https://www.emojiall.com/images/60/douyin/co1.png",
+    "互粉": "https://www.emojiall.com/images/60/douyin/co3.png",
+    "去污粉": "https://www.emojiall.com/images/60/douyin/co8.png",
+    "666": "https://www.emojiall.com/images/60/douyin/co9.png",
+    "舔屏": "https://www.emojiall.com/images/60/douyin/cof.png",
+    "鄙视": "https://www.emojiall.com/images/60/douyin/cog.png",
+    "紫薇别走": "https://www.emojiall.com/images/60/douyin/coj.png",
+    "不失礼貌的微笑": "https://www.emojiall.com/images/60/douyin/cop.png",
+    "吐舌": "https://www.emojiall.com/images/60/douyin/coq.png",
+    "呆无辜": "https://www.emojiall.com/images/60/douyin/cor.png",
+    "白眼": "https://www.emojiall.com/images/60/douyin/cot.png",
+    "吃瓜群众": "https://www.emojiall.com/images/60/douyin/cox.png",
+    "绿帽子": "https://www.emojiall.com/images/60/douyin/coz.png",
+    "皱眉": "https://www.emojiall.com/images/60/douyin/cp2.png",
+    "擦汗": "https://www.emojiall.com/images/60/douyin/cp3.png",
+    "强": "https://www.emojiall.com/images/60/douyin/cp7.png",
+    "如花": "https://www.emojiall.com/images/60/douyin/cp8.png",
+    "奋斗": "https://www.emojiall.com/images/60/douyin/cpc.png",
+    "微笑": "https://www.emojiall.com/images/60/douyin/1f642.png",
+    "害羞": "https://www.emojiall.com/images/60/douyin/1f60a.png",
+    "击掌": "https://www.emojiall.com/images/60/douyin/1f64c.png",
+    "左上": "https://www.emojiall.com/images/60/douyin/1f446.png",
+    "握手": "https://www.emojiall.com/images/60/douyin/1f91d.png",
+    "18禁": "https://www.emojiall.com/images/60/douyin/1f51e.png",
+    "菜刀": "https://www.emojiall.com/images/60/douyin/1f52a.png",
+    "爱心": "https://www.emojiall.com/images/60/douyin/2764.png",
+    "心碎": "https://www.emojiall.com/images/60/douyin/1f494.png",
+    "便便": "https://www.emojiall.com/images/60/douyin/1f4a9.png",
+    "惊讶": "https://www.emojiall.com/images/60/douyin/1f632.png",
+    "调皮": "https://www.emojiall.com/images/60/douyin/1f61b.png",
+    "礼物": "https://www.emojiall.com/images/60/douyin/1f381.png",
+    "蛋糕": "https://www.emojiall.com/images/60/douyin/1f382.png",
+    "派对": "https://www.emojiall.com/images/60/douyin/1f389.png",
+    "不看": "https://www.emojiall.com/images/60/douyin/1f648.png",
+    "炸弹": "https://www.emojiall.com/images/60/douyin/1f4a3.png",
+    "憨笑": "https://www.emojiall.com/images/60/douyin/1f600.png",
+    "悠闲": "https://www.emojiall.com/images/60/douyin/1f6ac.png",
+    "晕": "https://www.emojiall.com/images/60/douyin/1f635.png",
+    "囧": "https://www.emojiall.com/images/60/douyin/1f644.png",
+    "阴险": "https://www.emojiall.com/images/60/douyin/1f60f.png",
+    "惊恐": "https://www.emojiall.com/images/60/douyin/1f628.png",
+    "难过": "https://www.emojiall.com/images/60/douyin/1f641.png",
+    "斜眼": "https://www.emojiall.com/images/60/douyin/1f612.png",
+    "左哼哼": "https://www.emojiall.com/images/60/douyin/1f624.png",
+    "右哼哼": "https://www.emojiall.com/images/60/douyin/1f624-new.png",
+    "咒骂": "https://www.emojiall.com/images/60/douyin/1f92c.png",
+    "咖啡": "https://www.emojiall.com/images/60/douyin/2615.png",
+    "西瓜": "https://www.emojiall.com/images/60/douyin/1f349.png",
+    "衰": "https://www.emojiall.com/images/60/douyin/1f622.png",
+    "太阳": "https://www.emojiall.com/images/60/douyin/1f31e.png",
+    "月亮": "https://www.emojiall.com/images/60/douyin/1f31c.png",
+    "发": "https://www.emojiall.com/images/60/douyin/1f005.png",
+    "猪头": "https://www.emojiall.com/images/60/douyin/1f437.png",
+    "凋谢": "https://www.emojiall.com/images/60/douyin/1f940.png",
+    "红包": "https://www.emojiall.com/images/60/douyin/1f9e7.png",
+    "拳头": "https://www.emojiall.com/images/60/douyin/270a.png",
+    "胜利": "https://www.emojiall.com/images/60/douyin/270c.png",
+    "抱拳": "https://www.emojiall.com/images/60/douyin/1f64f.png",
+    "闭嘴": "https://www.emojiall.com/images/60/douyin/1f910.png",
+    "弱": "https://www.emojiall.com/images/60/douyin/1f44e.png",
+    "左边": "https://www.emojiall.com/images/60/douyin/1f448.png",
+    "右边": "https://www.emojiall.com/images/60/douyin/1f449.png",
+    "送心": "https://www.emojiall.com/images/60/douyin/1f970.png",
+    "耶": "https://www.emojiall.com/images/60/douyin/270c-new.png",
+    "捂脸": "https://www.emojiall.com/images/60/douyin/1f926.png",
+    "色": "https://www.emojiall.com/images/60/douyin/1f60d.png",
+    "打脸": "https://www.emojiall.com/images/60/douyin/1f915.png",
+    "大笑": "https://www.emojiall.com/images/60/douyin/1f604.png",
+    "哈欠": "https://www.emojiall.com/images/60/douyin/1f971.png",
+    "震惊": "https://www.emojiall.com/images/60/douyin/1f92f.png",
+    "大金牙": "https://www.emojiall.com/images/60/douyin/1f9b7.png",
+    "偷笑": "https://www.emojiall.com/images/60/douyin/1f92d.png",
+    "石化": "https://www.emojiall.com/images/60/douyin/1f630.png",
+    "思考": "https://www.emojiall.com/images/60/douyin/1f914.png",
+    "可怜": "https://www.emojiall.com/images/60/douyin/1f97a.png",
+    "嘘": "https://www.emojiall.com/images/60/douyin/1f92b.png",
+    "撇嘴": "https://www.emojiall.com/images/60/douyin/1f615.png",
+    "尴尬": "https://www.emojiall.com/images/60/douyin/1f605.png",
+    "笑哭": "https://www.emojiall.com/images/60/douyin/1f602.png",
+    "生病": "https://www.emojiall.com/images/60/douyin/1f637.png",
+    "奸笑": "https://www.emojiall.com/images/60/douyin/1f60f-new.png",
+    "得意": "https://www.emojiall.com/images/60/douyin/1f60e.png",
+    "坏笑": "https://www.emojiall.com/images/60/douyin/1f62c.png",
+    "抓狂": "https://www.emojiall.com/images/60/douyin/1f62b.png",
+    "钱": "https://www.emojiall.com/images/60/douyin/1f911.png",
+    "亲亲": "https://www.emojiall.com/images/60/douyin/1f61a.png",
+    "恐惧": "https://www.emojiall.com/images/60/douyin/1f631.png",
+    "愉快": "https://www.emojiall.com/images/60/douyin/1f604-new.png",
+    "玫瑰": "https://www.emojiall.com/images/60/douyin/1f339.png",
+    "快哭了": "https://www.emojiall.com/images/60/douyin/1f625.png",
+    "翻白眼": "https://www.emojiall.com/images/60/douyin/1f644-new.png",
+    "赞": "https://www.emojiall.com/images/60/douyin/1f44d.png",
+    "鼓掌": "https://www.emojiall.com/images/60/douyin/1f44f.png",
+    "感谢": "https://www.emojiall.com/images/60/douyin/1f64f-new.png",
+    "嘴唇": "https://www.emojiall.com/images/60/douyin/1f444.png",
+    "胡瓜": "https://www.emojiall.com/images/60/douyin/1f952.png",
+    "流泪": "https://www.emojiall.com/images/60/douyin/1f622-new.png",
+    "啤酒": "https://www.emojiall.com/images/60/douyin/1f37a.png",
+    "我想静静": "https://www.emojiall.com/images/60/douyin/1f611.png",
+    "委屈": "https://www.emojiall.com/images/60/douyin/1f641-new.png",
+    "飞吻": "https://www.emojiall.com/images/60/douyin/1f618.png",
+    "再见": "https://www.emojiall.com/images/60/douyin/1f44b.png",
+    "听歌": "https://www.emojiall.com/images/60/douyin/1f3a7.png",
+    "发怒": "https://www.emojiall.com/images/60/douyin/1f621.png",
+    "绝望的凝视": "https://www.emojiall.com/images/60/douyin/1f61e.png",
+    "看": "https://www.emojiall.com/images/60/douyin/1f436.png",
+    "熊吉": "https://www.emojiall.com/images/60/douyin/1f43b.png",
+    "骷髅": "https://www.emojiall.com/images/60/douyin/1f480.png",
+    "黑脸": "https://www.emojiall.com/images/60/douyin/1f31a.png",
+    "呲牙": "https://www.emojiall.com/images/60/douyin/1f601.png",
+    "吐": "https://www.emojiall.com/images/60/douyin/1f92e.png",
+    "流汗": "https://www.emojiall.com/images/60/douyin/1f613.png",
+    "摸头": "https://www.emojiall.com/images/60/douyin/1f60c.png",
+    "红脸": "https://www.emojiall.com/images/60/douyin/1f633.png",
+    "尬笑": "https://www.emojiall.com/images/60/douyin/1f605-new.png",
+    "做鬼脸": "https://www.emojiall.com/images/60/douyin/1f61c.png",
+    "睡": "https://www.emojiall.com/images/60/douyin/1f62a.png",
+    "惊喜": "https://www.emojiall.com/images/60/douyin/1f929.png",
+    "敲打": "https://www.emojiall.com/images/60/douyin/1f915-new.png",
+    "吐彩虹": "https://www.emojiall.com/images/60/douyin/1f308.png",
+    "大哭": "https://www.emojiall.com/images/60/douyin/1f62d.png",
+    "比心": "https://www.emojiall.com/images/60/douyin/1f91e.png",
+    "强壮": "https://www.emojiall.com/images/60/douyin/1f4aa.png",
+    "碰拳": "https://www.emojiall.com/images/60/douyin/1f91b.png",
+    "OK": "https://www.emojiall.com/images/60/douyin/1f44c.png",
+}
+
+# 构建 [表情名] 正则（按名称长度降序匹配）
+_EMOTE_KEYS_SORTED = sorted(_DOUYIN_EMOTE_MAP.keys(), key=len, reverse=True)
+_EMOTE_RE = re.compile(r'\[(' + '|'.join(re.escape(k) for k in _EMOTE_KEYS_SORTED) + r')\]')
+
+# ── 表情包加载与缓存 ─────────────────────────────────
+_emote_cache: dict[str, Image.Image | None] = {}
+
+
+def _load_emote(url: str, size: int) -> Image.Image | None:
+    cache_key = f"{url}_{size}"
+    if cache_key in _emote_cache:
+        cached = _emote_cache[cache_key]
+        return cached.copy() if cached else None
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+        img = img.resize((size, size), Image.Resampling.LANCZOS)
+        _emote_cache[cache_key] = img
+        return img.copy()
+    except Exception as e:
+        print(f"表情加载失败: {e}")
+        _emote_cache[cache_key] = None
+        return None
+
+
+# ── 段落切分管线 ──────────────────────────────────
+
+def _split_by_emotes(message: str) -> list[Segment]:
+    """按抖音 [表情名] 切分消息"""
+    segments: list[Segment] = []
+    last_end = 0
+    for match in _EMOTE_RE.finditer(message):
+        if match.start() > last_end:
+            segments.append((SEG_TEXT, message[last_end:match.start()]))
+        emote_name = match.group(1)
+        segments.append((SEG_EMOTE, _DOUYIN_EMOTE_MAP[emote_name]))
+        last_end = match.end()
+    if last_end < len(message):
+        segments.append((SEG_TEXT, message[last_end:]))
+    return segments if segments else [(SEG_TEXT, message)]
+
+
+def _split_by_emoji(segments: list[Segment]) -> list[Segment]:
+    """在 text 段落中识别 emoji 序列"""
+    result: list[Segment] = []
+    for seg_type, seg_data in segments:
+        if seg_type != SEG_TEXT:
+            result.append((seg_type, seg_data))
+            continue
+        last_end = 0
+        found = False
+        for match in _EMOJI_RE.finditer(seg_data):
+            found = True
+            if match.start() > last_end:
+                result.append((SEG_TEXT, seg_data[last_end:match.start()]))
+            emoji_text = _SKIN_TONE_RE.sub('', match.group())
+            if emoji_text:
+                result.append((SEG_EMOJI, emoji_text))
+            last_end = match.end()
+        if last_end < len(seg_data):
+            result.append((SEG_TEXT, seg_data[last_end:]))
+        elif not found:
+            result.append((SEG_TEXT, seg_data))
+    return result
+
+
+def _split_by_font_coverage(segments: list[Segment], main_font: ImageFont.FreeTypeFont) -> list[Segment]:
+    """将 text 段落中主字体无法渲染的字符标记为 unicode"""
+    result: list[Segment] = []
+    for seg_type, seg_data in segments:
+        if seg_type != SEG_TEXT:
+            result.append((seg_type, seg_data))
+            continue
+        cur_type = None
+        cur_text = ""
+        for ch in seg_data:
+            ch_type = SEG_UNICODE if ord(ch) > 127 and _is_tofu(ch, main_font) else SEG_TEXT
+            if ch_type == cur_type:
+                cur_text += ch
+            else:
+                if cur_text:
+                    result.append((cur_type, cur_text))
+                cur_type = ch_type
+                cur_text = ch
+        if cur_text:
+            result.append((cur_type, cur_text))
+    return result
+
+
+def _parse_message_segments(message: str, font_config: FontConfig | None = None) -> list[Segment]:
+    """将评论消息解析为 text / emote / emoji / unicode 段落列表"""
+    segments = _split_by_emotes(message)
+    segments = _split_by_emoji(segments)
+    if font_config:
+        segments = _split_by_font_coverage(segments, font_config.main)
+    return segments
+
+
+def _wrap_message_segments(
+    segments: list[Segment],
+    font_config: FontConfig,
+    max_width: int,
+    max_lines: int = 6,
+    emote_size: int = 30,
+) -> tuple[list[list[Segment]], int]:
+    """将混合段落列表按宽度换行"""
+    lines: list[list[Segment]] = []
+    current_line: list[Segment] = []
+    current_width = 0.0
+
+    def _flush_line():
+        nonlocal current_line, current_width
+        lines.append(current_line)
+        current_line = []
+        current_width = 0.0
+
+    def _remaining_chars_count(idx, text_discount=0):
+        count = -text_discount
+        for seg_type, seg_data in segments[idx:]:
+            if seg_type == SEG_EMOTE or seg_type == SEG_EMOJI:
+                count += 1
+            else:
+                count += len(seg_data)
+        return count
+
+    for idx, (seg_type, seg_data) in enumerate(segments):
+        if seg_type == SEG_EMOTE:
+            w = emote_size + 2
+            if current_width + w > max_width and current_line:
+                _flush_line()
+                if len(lines) >= max_lines:
+                    return lines, _remaining_chars_count(idx)
+            current_line.append((SEG_EMOTE, seg_data))
+            current_width += w
+        elif seg_type == SEG_EMOJI:
+            w = font_config.emoji.getlength(seg_data)
+            if current_width + w > max_width and current_line:
+                _flush_line()
+                if len(lines) >= max_lines:
+                    return lines, _remaining_chars_count(idx)
+            current_line.append((SEG_EMOJI, seg_data))
+            current_width += w
+        else:  # SEG_TEXT, SEG_UNICODE
+            font = font_config.fallback if seg_type == SEG_UNICODE else font_config.main
+            for i, ch in enumerate(seg_data):
+                if ch == '\n':
+                    _flush_line()
+                    if len(lines) >= max_lines:
+                        return lines, _remaining_chars_count(idx, len(seg_data) - i)
+                    continue
+                ch_w = font.getlength(ch)
+                if current_width + ch_w > max_width and current_line:
+                    _flush_line()
+                    if len(lines) >= max_lines:
+                        return lines, _remaining_chars_count(idx, len(seg_data) - i)
+                if current_line and current_line[-1][0] == seg_type:
+                    current_line[-1] = (seg_type, current_line[-1][1] + ch)
+                else:
+                    current_line.append((seg_type, ch))
+                current_width += ch_w
+
+    if current_line:
+        if len(lines) < max_lines:
+            lines.append(current_line)
+
+    return (lines, 0) if lines else ([[(SEG_TEXT, '')]], 0)
+
+
+def _draw_message_with_emotes(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    wrapped_lines: list[list[Segment]],
+    x: int,
+    y: int,
+    font_config: FontConfig,
+    line_height: int,
+    emote_size: int,
+    text_color: tuple | None = None,
+) -> int:
+    """绘制包含表情包的消息文本，返回占用的总高度"""
+    if text_color is None:
+        text_color = COLOR_MESSAGE
+    total_h = 0
+    for line_segments in wrapped_lines:
+        cx = x
+        for seg_type, seg_data in line_segments:
+            if seg_type == SEG_TEXT:
+                text_y = y + (line_height - font_config.main.size) // 2
+                draw.text((cx, text_y), seg_data, fill=text_color, font=font_config.main)
+                cx += int(font_config.main.getlength(seg_data))
+            elif seg_type == SEG_EMOJI:
+                emoji_y = y + (line_height - font_config.emoji.size) // 2 + EMOJI_TEXT_OFFSET
+                draw.text((cx, emoji_y), seg_data, fill=text_color, font=font_config.emoji, embedded_color=True)
+                cx += int(font_config.emoji.getlength(seg_data))
+            elif seg_type == SEG_UNICODE:
+                unicode_y = y + (line_height - font_config.fallback.size) // 2
+                draw.text((cx, unicode_y), seg_data, fill=text_color, font=font_config.fallback)
+                cx += int(font_config.fallback.getlength(seg_data))
+            elif seg_type == SEG_EMOTE:
+                emote_img = _load_emote(seg_data, emote_size)
+                if emote_img:
+                    emote_y = y + (line_height - emote_size) // 2
+                    canvas.paste(emote_img, (int(cx), int(emote_y)), emote_img)
+                    cx += emote_size + 1
+                else:
+                    # 加载失败时显示原始文本
+                    text_y = y + (line_height - font_config.main.size) // 2
+                    draw.text((cx, text_y), "[?]", fill=text_color, font=font_config.main)
+                    cx += int(font_config.main.getlength("[?]"))
+        y += line_height
+        total_h += line_height
+    return total_h
 
 
 def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
@@ -106,18 +490,12 @@ def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-FONT_TITLE = _find_font(32, bold=True)
-FONT_BODY = _find_font(24)
-FONT_SMALL = _find_font(20)
-FONT_DURATION = _find_font(22, bold=True)
-FONT_STAT_VALUE = _find_font(26, bold=True)
-FONT_STAT_LABEL = _find_font(18)
-
-# emoji 字体
-try:
-    _EMOJI_FONT = ImageFont.truetype(str(_EMOJI_FONT_PATH), 24)
-except (OSError, IOError):
-    _EMOJI_FONT = FONT_BODY
+FONT_TITLE = _find_font(36, bold=True)
+FONT_BODY = _find_font(28)
+FONT_SMALL = _find_font(24)
+FONT_DURATION = _find_font(28, bold=True)
+FONT_STAT_VALUE = _find_font(32, bold=True)
+FONT_STAT_LABEL = _find_font(28)
 
 
 # ── 通用绘图工具 ─────────────────────────────────
@@ -128,19 +506,28 @@ def _rounded_rectangle(draw: ImageDraw.ImageDraw, box, radius: int, fill):
 
 
 def _draw_text_with_fallback(draw: ImageDraw.ImageDraw, xy, text: str, fill, font, canvas=None):
-    """绘制文本，自动处理 emoji 回退"""
+    """绘制文本，自动使用 emoji 字体和回退字体"""
+    fc = _get_font_config(int(font.size))
     x, y = xy
-    for ch in text:
-        if _EMOJI_PATTERN.match(ch):
-            try:
-                draw.text((x, y), ch, fill=fill, font=_EMOJI_FONT, embedded_color=True)
-                x += int(_EMOJI_FONT.getlength(ch))
-            except Exception:
-                draw.text((x, y), ch, fill=fill, font=font)
-                x += int(font.getlength(ch))
-        else:
-            draw.text((x, y), ch, fill=fill, font=font)
-            x += int(font.getlength(ch))
+    cx = 0.0
+
+    last_end = 0
+    for match in _EMOJI_RE.finditer(text):
+        if match.start() > last_end:
+            seg = text[last_end:match.start()]
+            draw.text((x + cx, y), seg, fill=fill, font=fc.main)
+            cx += fc.main.getlength(seg)
+        emoji_text = match.group()
+        draw.text((x + cx, y + EMOJI_TEXT_OFFSET), emoji_text, fill=fill, font=fc.emoji, embedded_color=True)
+        cx += fc.emoji.getlength(emoji_text)
+        last_end = match.end()
+
+    if last_end < len(text):
+        seg = text[last_end:]
+        draw.text((x + cx, y), seg, fill=fill, font=fc.main)
+        cx += fc.main.getlength(seg)
+
+    return cx
 
 
 def _truncate_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
@@ -298,7 +685,7 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
     """
     content_width = CARD_WIDTH - PADDING * 2
 
-    title_lines = _wrap_text(work.desc, FONT_TITLE, content_width, max_lines=5)
+    title_lines = _wrap_text(work.title, FONT_TITLE, content_width, max_lines=5)
     title_line_height = 48
     title_height = len(title_lines) * title_line_height
     total_height = CARD_HEIGHT_BASE + title_height
@@ -350,6 +737,8 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
     author_text = work.author_nickname
     text_y = y_cursor + (AVATAR_SIZE - FONT_BODY.size) // 2
     draw.text((PADDING + AVATAR_SIZE + PADDING, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
+
+    _draw_logo(canvas, str(_ASSETS_DIR / "douyin.png"), 650, y_cursor+5, AVATAR_SIZE-10)
     y_cursor += AVATAR_SIZE + LINE_GAP
 
     # 发布时间、分辨率
@@ -358,8 +747,8 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
         meta_parts.append(f"发布于 {work.create_time_str}")
     if work.width and work.height:
         meta_parts.append(f"分辨率：{work.resolution_str}")
-    if work.music_title:
-        meta_parts.append(f"♪ {work.music_title}")
+    if work.video_size > 0:
+        meta_parts.append(f"{work.video_size / 1024 / 1024:.2f} MB")
     meta_text = " | ".join(meta_parts)
     draw.text((PADDING, y_cursor), meta_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
     y_cursor += FONT_SMALL.size + LINE_GAP + 4
@@ -378,18 +767,18 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
     # 数据统计
     stats = [
         ("点赞", DouyinWorkInfo.format_count(work.digg_count)),
+        ("推荐", DouyinWorkInfo.format_count(work.recommend_count)),
+        ("弹幕", DouyinWorkInfo.format_count(work.danmaku_count)),
         ("评论", DouyinWorkInfo.format_count(work.comment_count)),
         ("收藏", DouyinWorkInfo.format_count(work.collect_count)),
         ("分享", DouyinWorkInfo.format_count(work.share_count)),
     ]
-    if work.play_count > 0:
-        stats.insert(0, ("播放", DouyinWorkInfo.format_count(work.play_count)))
     item_width = content_width // len(stats)
     x = PADDING
     for label, value in stats:
         _draw_stat_item(draw, x, y_cursor, item_width, label, value)
         x += item_width
-    y_cursor += 80
+    y_cursor += FONT_STAT_LABEL.size + FONT_STAT_VALUE.size + LINE_GAP + 4
 
     _draw_copyright(draw, canvas, CARD_WIDTH // 2 - 100, y_cursor)
 
@@ -406,24 +795,22 @@ def render_to_bytes(work: DouyinWorkInfo, fmt: str = "PNG", download_cover: bool
 
 
 # ── 评论区常量 ────────────────────────────────────
-COMMENT_CARD_WIDTH = 800
+COMMENT_CARD_WIDTH = 760
 COMMENT_PADDING = 20
 COMMENT_AVATAR_SIZE = 48
 COMMENT_SUB_AVATAR_SIZE = 36
 COLOR_COMMENT_BG = (255, 255, 255)
-COLOR_COMMENT_HEADER_BG = (254, 44, 85)  # 抖音红
-COLOR_COMMENT_HEADER_TEXT = (255, 255, 255)
-COLOR_HOT_BADGE_BG = (255, 68, 68)
-COLOR_HOT_BADGE_TEXT = (255, 255, 255)
+COLOR_COMMENT_HEADER_TEXT = (0x16, 0x18, 0x23)
+COLOR_COMMENT_HEADER_BG = (0xc4, 0xb7, 0xd7)
 COLOR_AUTHOR_LIKED_BG = (254, 44, 85)
 COLOR_AUTHOR_LIKED_TEXT = (255, 255, 255)
-COLOR_LIKE_TEXT = (153, 153, 153)
+COLOR_LIKE_TEXT = (255, 0, 80)
 COLOR_TIME_TEXT = (153, 153, 153)
 COLOR_REPLY_COUNT = (109, 192, 233)
 COLOR_USERNAME = (51, 51, 51)
 COLOR_MESSAGE = (34, 34, 34)
 COLOR_SUB_LINE = (229, 233, 239)
-COLOR_IP_TEXT = (180, 180, 180)
+COLOR_IP_TEXT = (80, 0, 160)
 
 # 评论区字体
 FONT_COMMENT_HEADER = _find_font(24, bold=True)
@@ -455,10 +842,13 @@ def _measure_comment_height(comment: DouyinCommentItem, content_width: int, is_s
     text_left = avatar_size + 12
     text_width = content_width - text_left
 
-    # 消息行
+    # 使用段落系统计算消息行数
     msg_line_h = 30 if is_sub else 32
-    msg_lines = _wrap_text(comment.text, font_msg, text_width, max_lines=6)
-    msg_h = len(msg_lines) * msg_line_h
+    emote_size = 26 if is_sub else 30
+    fc = _get_font_config(int(font_msg.size))
+    segments = _parse_message_segments(comment.text, fc)
+    wrapped, _ = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
+    msg_h = len(wrapped) * msg_line_h
 
     # 贴纸高度
     sticker_h = 0
@@ -498,16 +888,12 @@ def _draw_single_comment(
     text_x = x + avatar_size + 12
     text_width = content_width - avatar_size - 12
 
-    # 用户名行: [热评] [作者赞] 用户名
+    # 用户名行: [作者赞] 用户名
     name_y = y + 2
     badge_x = text_x
 
-    if comment.is_hot:
-        w = _draw_small_badge(draw, badge_x, name_y, "热评", COLOR_HOT_BADGE_BG, COLOR_HOT_BADGE_TEXT)
-        badge_x += w + 6
-
     if comment.is_author_digged:
-        w = _draw_small_badge(draw, badge_x, name_y, "作者赞", COLOR_AUTHOR_LIKED_BG, COLOR_AUTHOR_LIKED_TEXT)
+        w = _draw_small_badge(draw, badge_x, name_y, "作者赞过", COLOR_AUTHOR_LIKED_BG, COLOR_AUTHOR_LIKED_TEXT)
         badge_x += w + 6
 
     uname_display = _truncate_text(comment.nickname, font_username, text_width - (badge_x - text_x) - 60)
@@ -516,12 +902,14 @@ def _draw_single_comment(
     name_line_h = 28 if is_sub else 30
     y += name_line_h + 6
 
-    # 评论内容
+    # 评论内容（使用段落系统）
     msg_line_h = 30 if is_sub else 32
-    msg_lines = _wrap_text(comment.text, font_msg, text_width, max_lines=6)
-    for line in msg_lines:
-        _draw_text_with_fallback(draw, (text_x, y), line, fill=COLOR_MESSAGE, font=font_msg, canvas=canvas)
-        y += msg_line_h
+    emote_size = 26 if is_sub else 30
+    fc = _get_font_config(int(font_msg.size))
+    segments = _parse_message_segments(comment.text, fc)
+    wrapped, _ = _wrap_message_segments(segments, fc, text_width, max_lines=6, emote_size=emote_size)
+    msg_h = _draw_message_with_emotes(canvas, draw, wrapped, text_x, y, fc, msg_line_h, emote_size)
+    y += msg_h
 
     # 贴纸
     if comment.sticker_url and not is_sub:
@@ -537,17 +925,17 @@ def _draw_single_comment(
 
     like_text = f"♥ {comment.digg_count}"
     draw.text((meta_x, y), like_text, fill=COLOR_LIKE_TEXT, font=font_meta)
-    meta_x += int(font_meta.getlength(like_text)) + 20
+    meta_x += int(font_meta.getlength(like_text)) + PADDING
+
+    if comment.ip_label:
+        ip_text = f"{comment.ip_label}"
+        draw.text((meta_x, y), ip_text, fill=COLOR_IP_TEXT, font=font_meta)
+        meta_x += int(font_meta.getlength(ip_text)) + PADDING
 
     time_text = comment.create_time_str
     if time_text:
         draw.text((meta_x, y), time_text, fill=COLOR_TIME_TEXT, font=font_meta)
-        meta_x += int(font_meta.getlength(time_text)) + 20
-
-    if comment.ip_label:
-        ip_text = f"IP: {comment.ip_label}"
-        draw.text((meta_x, y), ip_text, fill=COLOR_IP_TEXT, font=font_meta)
-        meta_x += int(font_meta.getlength(ip_text)) + 20
+        meta_x += int(font_meta.getlength(time_text)) + PADDING
 
     if comment.reply_comment_total > 0 and not is_sub:
         reply_text = f"{comment.reply_comment_total}条回复"
@@ -593,9 +981,11 @@ def render_comments_card(comments_data: DouyinCommentsData, max_comments: int = 
 
     # 头部
     _rounded_rectangle(draw, (0, 0, COMMENT_CARD_WIDTH, header_h), 0, COLOR_COMMENT_HEADER_BG)
-    header_text = f"热门评论 ({comments_data.total})"
+    header_text = f"评论 ({comments_data.total})"
     header_tw = FONT_COMMENT_HEADER.getlength(header_text)
     height = FONT_COMMENT_HEADER.getbbox(header_text)[3]
+    logo_w = _draw_logo(canvas, str(_ASSETS_DIR / "douyin.png"), COMMENT_PADDING*2, (header_h-40) // 2, 40)
+    _draw_logo(canvas, str(_ASSETS_DIR / "douyin.png"), COMMENT_CARD_WIDTH - COMMENT_PADDING*2 - logo_w, (header_h-40) // 2, 40)
     draw.text(
         ((COMMENT_CARD_WIDTH - header_tw) / 2, (header_h - height) / 2),
         header_text,

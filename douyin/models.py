@@ -80,6 +80,7 @@ class DouyinUserInfo(BaseModel):
 class DouyinWorkInfo(BaseModel):
     """抖音作品信息模型"""
     aweme_id: str
+    title: str = ""
     desc: str = ""  # 作品描述
     create_time: int = 0  # Unix时间戳
     duration: int = 0  # 毫秒
@@ -100,10 +101,16 @@ class DouyinWorkInfo(BaseModel):
 
     # 数据统计
     digg_count: int = 0  # 点赞
+    danmaku_count: int = 0  # 弹幕数
     comment_count: int = 0  # 评论
     collect_count: int = 0  # 收藏
     share_count: int = 0  # 分享
-    play_count: int = 0  # 播放
+    recommend_count: int = 0  # 推荐
+
+    video_size: int = 0  # 视频文件大小，单位字节
+    video_url: str = ""  # 视频URL
+
+    suggest_words: list[str] = []  # 相关搜索词
 
     # 音乐
     music_title: str = ""
@@ -148,6 +155,20 @@ class DouyinWorkInfo(BaseModel):
         statistics = item.get("statistics", {})
         video = item.get("video", {})
         music = item.get("music", {})
+        try:
+            suggest_words = item.get("suggest_words", {}).get("suggest_words", [])[0].get("words", [])
+        except (IndexError, AttributeError):
+            suggest_words = []
+        words = []
+        for obj in suggest_words:
+            words.append(obj.get("word", ""))
+        
+        danmaku_control = item.get("danmaku_control", {})
+        danmaku_count = danmaku_control.get("danmaku_cnt", 0)
+
+        play_addr = video.get("bit_rate", [])[0].get("play_addr", {})
+        video_size = play_addr.get("data_size", 0)
+        video_url = play_addr.get("url_list", [])[0] if play_addr.get("url_list") else ""
 
         # 封面
         cover_url = ""
@@ -163,6 +184,7 @@ class DouyinWorkInfo(BaseModel):
 
         return cls(
             aweme_id=str(item.get("aweme_id", "")),
+            title=item.get("item_title", ""),
             desc=item.get("desc", ""),
             create_time=item.get("create_time", 0),
             duration=item.get("duration", 0),
@@ -178,7 +200,11 @@ class DouyinWorkInfo(BaseModel):
             comment_count=statistics.get("comment_count", 0),
             collect_count=statistics.get("collect_count", 0),
             share_count=statistics.get("share_count", 0),
-            play_count=statistics.get("play_count", 0),
+            recommend_count=statistics.get("recommend_count", 0),
+            danmaku_count=danmaku_count,
+            video_size=video_size,
+            video_url=video_url,
+            suggest_words=words,
             music_title=music.get("title", ""),
             music_author=music.get("author", ""),
             is_top=item.get("is_top", 0),
