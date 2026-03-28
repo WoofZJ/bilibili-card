@@ -30,7 +30,7 @@ COLOR_OVERFLOW = (120, 120, 120)
 COLOR_LINK = (0x00, 0x6B, 0xDE) # 链接颜色
 
 # ── 字体加载 ─────────────────────────────────────
-_ASSETS_DIR = Path(__file__).parent / "assets"
+_ASSETS_DIR = Path(__file__).parent.parent / "assets"
 
 # ── 字体路径 ──────────────────────────────────────
 _MAIN_FONT_PATH = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
@@ -968,7 +968,7 @@ def _draw_copyright(draw: Image.Image, canvas: ImageDraw.ImageDraw, x: int, y: i
     draw.text((x, y), text, fill=COLOR_STAT_LABEL, font=FONT_SMALL)
     text_w = FONT_SMALL.getlength(text)
     x += int(text_w) + 5
-    logo_w = _draw_logo(canvas, "assets/logo.png", x, y-2, 32)
+    logo_w = _draw_logo(canvas, str(_ASSETS_DIR / "logo.png"), x, y-2, 32)
     text = "WoofZJ"
     x += logo_w + 5
     draw.text((x, y), text, fill=(255, 0, 0), font=FONT_SMALL)
@@ -1077,9 +1077,9 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
         left += FONT_BODY.getlength(right_text) + PADDING
     if left > 650:
         y_cursor += AVATAR_SIZE + LINE_GAP
-        _draw_logo(canvas, "assets/bilibili.png", 720, y_cursor-5, FONT_SMALL.size + 10)
+        _draw_logo(canvas, str(_ASSETS_DIR / "bilibili.png"), 720, y_cursor-5, FONT_SMALL.size + 10)
     else:
-        _draw_logo(canvas, "assets/bilibili.png", 670, y_cursor + 5, AVATAR_SIZE - 10)
+        _draw_logo(canvas, str(_ASSETS_DIR / "bilibili.png"), 670, y_cursor + 5, AVATAR_SIZE - 10)
         y_cursor += AVATAR_SIZE + LINE_GAP
 
     # draw publish time, bvid, resolution
@@ -1398,8 +1398,8 @@ def render_comments_card(comments_data: CommentsData, max_comments: int = 15) ->
 
     # ── 头部：评论 (N) ──
     _rounded_rectangle(draw, (0, 0, COMMENT_CARD_WIDTH, header_h), 0, COLOR_COMMENT_HEADER_BG)
-    logo_w = _draw_logo(canvas, "assets/bilibili.png", COMMENT_PADDING, (header_h-40) // 2, 40)
-    _draw_logo(canvas, "assets/bilibili.png", COMMENT_CARD_WIDTH - COMMENT_PADDING - logo_w, (header_h-40) // 2, 40)
+    logo_w = _draw_logo(canvas, str(_ASSETS_DIR / "bilibili.png"), COMMENT_PADDING, (header_h-40) // 2, 40)
+    _draw_logo(canvas, str(_ASSETS_DIR / "bilibili.png"), COMMENT_CARD_WIDTH - COMMENT_PADDING - logo_w, (header_h-40) // 2, 40)
     header_text = f"热门评论 ({comments_data.total})"
     header_tw = FONT_COMMENT_HEADER.getlength(header_text)
     height = FONT_COMMENT_HEADER.getbbox(header_text)[3]
