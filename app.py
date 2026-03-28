@@ -1,237 +1,60 @@
 """
-B站视频信息 Web API
+视频信息 Web API — 统一入口
 
 启动: uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
-API 端点:
-  GET  /video/latest?user_id=xxx          返回最新视频 JSON
-  GET  /video/latest/image?user_id=xxx    返回最新视频信息卡片图片
-  GET  /video/info?bvid=xxx               根据BV号返回视频 JSON
-  GET  /video/info/image?bvid=xxx         根据BV号返回视频信息卡片图片
-  GET  /health                            健康检查
+API 路由:
+  /bilibili/...   B站相关接口 (详见 bilibili/router.py)
+  /douyin/...     抖音相关接口 (详见 douyin/router.py)
+  /health         健康检查
 """
 
-import time
+import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI
 
-from bilibili_api import request_settings, select_client, user, video, search, get_real_url, comment
-
-from models import VideoInfo, CommentsData
-from render import render_to_bytes, render_comments_to_bytes
-from log import logger, archive_json, archive_image
+from log import logger
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动时初始化 bilibili_api 客户端"""
+    """应用启动时初始化各平台客户端"""
+    # ── 初始化 B站 客户端 ──
+    from bilibili_api import request_settings, select_client
     request_settings.set("impersonate", "safari")
-    # with open(".env", "r", encoding="utf-8") as f:
-    #     for line in f:
-    #         if line.startswith("PROXY="):
-    #             proxy = line.strip().split("=", 1)[1].strip('"')
-    #             request_settings.set_proxy(proxy)
-    #             break
     select_client("curl_cffi")
     logger.info("bilibili_api 客户端已初始化")
+
+    # ── 初始化 抖音 客户端 ──
+    try:
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent / "douyin"))
+        from douyin.utils.common_util import init as dy_init
+        from douyin.router import set_auth
+        dy_auth = dy_init()
+        set_auth(dy_auth)
+        logger.info("抖音 API 客户端已初始化")
+    except Exception as e:
+        logger.warning("抖音 API 初始化失败（接口不可用）: %s", e)
+
     yield
 
 
 app = FastAPI(
-    title="B站视频信息 API",
-    description="获取B站用户最新视频信息，支持JSON和卡片图片输出",
-    version="1.0.0",
+    title="视频平台数据 API",
+    description="聚合 B站 / 抖音 视频数据，支持 JSON 和卡片图片输出",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
+# ── 注册路由 ──────────────────────────────────────
+from bilibili.router import router as bilibili_router
+from douyin.router import router as douyin_router
 
-# ── 缓存 ──────────────────────────────────────────
-_CACHE_TTL = 60  # 缓存有效期（秒）
-_cache: dict[str, tuple[float, VideoInfo]] = {}  # key -> (expire_ts, data)
-
-
-def _cache_get(key: str) -> VideoInfo | None:
-    """获取未过期的缓存条目"""
-    entry = _cache.get(key)
-    if entry and entry[0] > time.monotonic():
-        return entry[1]
-    _cache.pop(key, None)
-    return None
+app.include_router(bilibili_router)
+app.include_router(douyin_router)
 
 
-def _cache_set(key: str, value: VideoInfo, ttl: int = _CACHE_TTL) -> None:
-    """写入缓存"""
-    _cache[key] = (time.monotonic() + ttl, value)
-
-
-# ── 业务逻辑 ─────────────────────────────────────
-async def _fetch_latest_video(user_id: int) -> VideoInfo:
-    """获取指定用户的最新视频信息（带缓存）"""
-    cache_key = f"latest:{user_id}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: latest user_id=%s", user_id)
-        return cached
-
-    try:
-        u = user.User(user_id)
-        page = await u.get_videos(ps=1)
-        logger.info("API 请求完成: get_videos user_id=%s", user_id)
-    except Exception as e:
-        logger.error("API 请求失败: get_videos user_id=%s: %s", user_id, e)
-        raise HTTPException(status_code=502, detail=f"获取视频列表失败: {e}")
-
-    vlist = page.get("list", {}).get("vlist", [])
-    if not vlist:
-        logger.warning("用户无投稿: user_id=%s", user_id)
-        raise HTTPException(status_code=404, detail=f"用户 {user_id} 没有投稿视频")
-
-    bvid = vlist[0]["bvid"]
-    result = await _fetch_video_by_bvid(bvid)
-    _cache_set(cache_key, result)
-    return result
-
-
-async def _fetch_video_by_bvid(bvid: str) -> VideoInfo:
-    """根据 BV 号获取视频详细信息（带缓存）"""
-    cache_key = f"bvid:{bvid}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: video bvid=%s", bvid)
-        return cached
-
-    try:
-        v = video.Video(bvid)
-        info = await v.get_info()
-        danmakus = await v.get_danmaku_snapshot()
-        archive_json("video_info", bvid, info)
-        logger.info("API 请求完成: get_info bvid=%s", bvid)
-    except Exception as e:
-        logger.error("API 请求失败: get_info bvid=%s: %s", bvid, e)
-        raise HTTPException(status_code=502, detail=f"获取视频信息失败: {e}")
-    result = VideoInfo.from_api(info)
-    _cache_set(cache_key, result, ttl=60*60)
-    # 缓存弹幕快照（文本列表）
-    danmaku_texts = [str(d) for d in danmakus] if danmakus else []
-    _cache_set(f"danmaku:{bvid}", danmaku_texts, ttl=60*60)
-    return result
-
-async def _fetch_uid_by_name(username: str) -> int:
-    """根据用户名获取用户ID"""
-    cache_key = f"uid:{username}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: uid username=%s", username)
-        return cached
-
-    try:
-        result = await search.search_by_type(keyword=username, search_type=search.SearchObjectType.USER, page=1, page_size=5, order_type=search.OrderUser.FANS)
-        user_list = result["result"]
-        user_name = user_list[0]["uname"]
-        user_id = user_list[0]["mid"]
-        fans = user_list[0]["fans"]
-        result = {"username": user_name, "user_id": user_id, "fans": fans}
-        logger.info("API 请求完成: search_user username=%s -> uid=%s", username, user_id)
-    except Exception as e:
-        logger.error("API 请求失败: search_user username=%s: %s", username, e)
-        raise HTTPException(status_code=502, detail=f"获取用户信息失败: {e}")
-    _cache_set(cache_key, result, ttl=60*60*24)
-    return result
-
-async def _fetch_video_by_short_url(short_url: str) -> VideoInfo:
-    """根据短链接获取视频信息"""
-    cache_key = f"short_link:{short_url}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: short_link=%s", short_url)
-        real_url = cached
-    else:
-        real_url = await get_real_url(short_url)
-        logger.info("短链接解析: %s -> %s", short_url, real_url)
-        _cache_set(cache_key, real_url, ttl=24*60*60)
-
-    bvid = real_url.split("?")[0].strip("/").split("/")[-1]
-    return await _fetch_video_by_bvid(bvid)
-
-# ── API 端点 ──────────────────────────────────────
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-
-@app.get("/video/latest", response_model=VideoInfo, summary="获取用户最新视频信息")
-async def get_latest_video(user_id: int = Query(..., description="B站用户ID", examples=[1137066730])):
-    return await _fetch_latest_video(user_id)
-
-
-@app.get("/video/latest/image", summary="获取用户最新视频信息卡片图片")
-async def get_latest_video_image(user_id: int = Query(..., description="B站用户ID", examples=[1137066730])):
-    video_info = await _fetch_latest_video(user_id)
-    danmaku_list = _cache_get(f"danmaku:{video_info.bvid}")
-    img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
-    archive_image(video_info.bvid, img_bytes)
-    return Response(content=img_bytes, media_type="image/png")
-
-
-@app.get("/video/info", response_model=VideoInfo, summary="根据BV号获取视频信息")
-async def get_video_info(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
-    logger.info("收到请求: /video/info bvid=%s", bvid)
-    return await _fetch_video_by_bvid(bvid)
-
-
-@app.get("/video/info/image", summary="根据BV号获取视频信息卡片图片")
-async def get_video_info_image(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
-    video_info = await _fetch_video_by_bvid(bvid)
-    danmaku_list = _cache_get(f"danmaku:{bvid}")
-    img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
-    archive_image(bvid, img_bytes)
-    return Response(content=img_bytes, media_type="image/png")
-
-@app.get("/user/id", summary="根据用户名获取用户ID")
-async def get_user_id(username: str = Query(..., description="B站用户名", examples=["某某UP主"])):
-    return await _fetch_uid_by_name(username)
-
-@app.get("/video/info/short_url", summary="根据短链接获取视频信息")
-async def get_video_info_short_url(short_url: str = Query(..., description="视频短链接", examples=["https://b23.tv/xxxx"])):
-    return await _fetch_video_by_short_url(short_url)
-
-
-# ── 评论相关 ──────────────────────────────────────
-async def _fetch_comments(bvid: str) -> CommentsData:
-    """获取视频评论数据（带缓存）"""
-    cache_key = f"comments:{bvid}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: comments bvid=%s", bvid)
-        return cached
-
-    try:
-        v = video.Video(bvid)
-        aid = v.get_aid()
-        comments_raw = await comment.get_comments_lazy(
-            aid, type_=comment.CommentResourceType.VIDEO, order=comment.OrderType.LIKE
-        )
-        archive_json("comments", bvid, comments_raw)
-        logger.info("API 请求完成: get_comments bvid=%s", bvid)
-    except Exception as e:
-        logger.error("API 请求失败: get_comments bvid=%s: %s", bvid, e)
-        raise HTTPException(status_code=502, detail=f"获取评论失败: {e}")
-
-    result = CommentsData.from_api(comments_raw)
-    _cache_set(cache_key, result, ttl=120)
-    return result
-
-
-@app.get("/video/comments", summary="获取视频热门评论 JSON")
-async def get_video_comments(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
-    return await _fetch_comments(bvid)
-
-
-@app.get("/video/comments/image", summary="获取视频热门评论卡片图片")
-async def get_video_comments_image(
-    bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
-    max_comments: int = Query(15, description="最多显示评论数", ge=1, le=50),
-):
-    comments_data = await _fetch_comments(bvid)
-    if comments_data.total == 0 or (not comments_data.top_comment and not comments_data.comments):
-        raise HTTPException(status_code=404, detail="该视频没有可见评论")
-    img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
-    archive_image(f"{bvid}_comments", img_bytes)
-    return Response(content=img_bytes, media_type="image/png")
