@@ -188,3 +188,94 @@ class DouyinWorkInfo(BaseModel):
     def from_api_list(cls, items: list) -> list["DouyinWorkInfo"]:
         """从作品列表数据构造"""
         return [cls.from_api(item) for item in items]
+
+
+class DouyinCommentItem(BaseModel):
+    """抖音单条评论"""
+    cid: str  # 评论ID
+    aweme_id: str = ""  # 作品ID
+    nickname: str  # 用户名
+    uid: str = ""  # 用户ID
+    sec_uid: str = ""  # 用户sec_uid
+    avatar: str = ""  # 头像URL
+    text: str  # 评论内容
+    digg_count: int = 0  # 点赞数
+    create_time: int = 0  # 发布时间戳
+    ip_label: str = ""  # IP属地
+    is_hot: bool = False  # 是否热评
+    is_author_digged: bool = False  # 作者是否点赞
+    reply_comment_total: int = 0  # 回复数量
+    level: int = 0  # 评论层级 1=一级 2=二级
+    sticker_url: str = ""  # 表情贴纸URL
+    sub_comments: list["DouyinCommentItem"] = []  # 子评论
+
+    @property
+    def create_time_str(self) -> str:
+        if self.create_time:
+            return datetime.fromtimestamp(self.create_time).strftime("%Y-%m-%d %H:%M")
+        return ""
+
+    @classmethod
+    def from_api(cls, comment: dict) -> "DouyinCommentItem":
+        """从单条评论数据构造"""
+        user = comment.get("user", {})
+
+        # 头像
+        avatar_url = ""
+        avatar_thumb = user.get("avatar_thumb", {})
+        if avatar_thumb and avatar_thumb.get("url_list"):
+            avatar_url = avatar_thumb["url_list"][0]
+
+        # 表情贴纸
+        sticker_url = ""
+        sticker = comment.get("sticker", {})
+        if sticker:
+            static_url = sticker.get("static_url", {})
+            if static_url and static_url.get("url_list"):
+                sticker_url = static_url["url_list"][0]
+
+        # 子评论
+        sub_comments = []
+        reply_comment = comment.get("reply_comment")
+        if reply_comment and isinstance(reply_comment, list):
+            for sub in reply_comment:
+                sub_comments.append(cls.from_api(sub))
+
+        return cls(
+            cid=str(comment.get("cid", "")),
+            aweme_id=str(comment.get("aweme_id", "")),
+            nickname=user.get("nickname", ""),
+            uid=str(user.get("uid", "")),
+            sec_uid=user.get("sec_uid", ""),
+            avatar=avatar_url,
+            text=comment.get("text", ""),
+            digg_count=comment.get("digg_count", 0),
+            create_time=comment.get("create_time", 0),
+            ip_label=comment.get("ip_label", ""),
+            is_hot=comment.get("is_hot", False),
+            is_author_digged=comment.get("is_author_digged", False),
+            reply_comment_total=comment.get("reply_comment_total", 0),
+            level=comment.get("level", 0),
+            sticker_url=sticker_url,
+            sub_comments=sub_comments,
+        )
+
+
+class DouyinCommentsData(BaseModel):
+    """抖音评论数据"""
+    total: int = 0  # 总评论数
+    comments: list[DouyinCommentItem] = []  # 评论列表
+
+    @classmethod
+    def from_api(cls, data: dict) -> "DouyinCommentsData":
+        """从 get_work_all_comment() 返回的评论列表构造"""
+        # get_work_all_comment 返回的是 list
+        if isinstance(data, list):
+            comments = [DouyinCommentItem.from_api(c) for c in data]
+            return cls(total=len(comments), comments=comments)
+
+        # 原始 API 单页返回格式
+        total = data.get("total", 0)
+        raw_comments = data.get("comments", []) or []
+        comments = [DouyinCommentItem.from_api(c) for c in raw_comments]
+        return cls(total=total, comments=comments)
