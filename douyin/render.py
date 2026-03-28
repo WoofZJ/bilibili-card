@@ -4,6 +4,7 @@ import requests
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageFilter
 from douyin.models import DouyinWorkInfo, DouyinCommentsData, DouyinCommentItem
 
 # ── 常量 ──────────────────────────────────────────
@@ -576,25 +577,55 @@ def _draw_stat_item(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, label
 
 # ── 图片加载 ─────────────────────────────────────
 
-def _load_cover(url: str) -> Image.Image:
-    """从 URL 加载封面图片并裁剪为 16:9"""
+def _load_cover(cover_url: str, first_frame_url: str = "") -> Image.Image:
+    """加载 16:9 封面：前景封面居中且高度撑满，背景为首帧模糊画面。"""
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        # 裁剪为 16:9
-        w, h = img.size
+        # 优先使用首帧作为背景，无首帧时回退到封面
+        bg_url = first_frame_url or cover_url
+        bg_resp = requests.get(bg_url, timeout=10)
+        bg_resp.raise_for_status()
+        bg_img = Image.open(io.BytesIO(bg_resp.content)).convert("RGBA")
+
+        # 背景填满 16:9，采用 center-crop 再高斯模糊
         target_ratio = CARD_WIDTH / COVER_HEIGHT
-        current_ratio = w / h
-        if current_ratio > target_ratio:
-            new_w = int(h * target_ratio)
-            left = (w - new_w) // 2
-            img = img.crop((left, 0, left + new_w, h))
-        elif current_ratio < target_ratio:
-            new_h = int(w / target_ratio)
-            top = (h - new_h) // 2
-            img = img.crop((0, top, w, top + new_h))
-        return img.resize((CARD_WIDTH, COVER_HEIGHT), Image.Resampling.LANCZOS)
+        bw, bh = bg_img.size
+        bg_ratio = bw / bh if bh else target_ratio
+        if bg_ratio > target_ratio:
+            new_w = int(bh * target_ratio)
+            left = (bw - new_w) // 2
+            bg_img = bg_img.crop((left, 0, left + new_w, bh))
+        elif bg_ratio < target_ratio:
+            new_h = int(bw / target_ratio)
+            top = (bh - new_h) // 2
+            bg_img = bg_img.crop((0, top, bw, top + new_h))
+        bg_img = bg_img.resize((CARD_WIDTH, COVER_HEIGHT), Image.Resampling.LANCZOS)
+        bg_img = bg_img.filter(ImageFilter.GaussianBlur(radius=16))
+
+        # 叠加一层浅暗遮罩，提升前景封面可读性
+        overlay = Image.new("RGBA", (CARD_WIDTH, COVER_HEIGHT), (0, 0, 0, 35))
+        bg_img.alpha_composite(overlay)
+
+        # 前景封面：高度撑满，宽度按比例缩放并水平居中
+        fg_resp = requests.get(cover_url, timeout=10)
+        fg_resp.raise_for_status()
+        fg_img = Image.open(io.BytesIO(fg_resp.content)).convert("RGBA")
+        fw, fh = fg_img.size
+        if fh <= 0:
+            return bg_img
+
+        scale = COVER_HEIGHT / fh
+        new_w = max(1, int(fw * scale))
+        fg_img = fg_img.resize((new_w, COVER_HEIGHT), Image.Resampling.LANCZOS)
+
+        if new_w > CARD_WIDTH:
+            left = (new_w - CARD_WIDTH) // 2
+            fg_img = fg_img.crop((left, 0, left + CARD_WIDTH, COVER_HEIGHT))
+            x = 0
+        else:
+            x = (CARD_WIDTH - new_w) // 2
+
+        bg_img.paste(fg_img, (x, 0), fg_img)
+        return bg_img
     except Exception:
         return _create_placeholder_cover()
 
@@ -698,7 +729,7 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
 
     # 封面
     if download_cover and work.cover:
-        cover = _load_cover(work.cover)
+        cover = _load_cover(work.cover, work.first_frame)
     else:
         cover = _create_placeholder_cover()
     cover_rgba = cover.convert("RGBA")
@@ -896,8 +927,7 @@ def _draw_single_comment(
         w = _draw_small_badge(draw, badge_x, name_y, "作者赞过", COLOR_AUTHOR_LIKED_BG, COLOR_AUTHOR_LIKED_TEXT)
         badge_x += w + 6
 
-    uname_display = _truncate_text(comment.nickname, font_username, text_width - (badge_x - text_x) - 60)
-    draw.text((badge_x, name_y), uname_display, fill=COLOR_USERNAME, font=font_username)
+    _draw_text_with_fallback(draw, (badge_x, name_y), comment.nickname, fill=COLOR_USERNAME, font=font_username, canvas=canvas)
 
     name_line_h = 28 if is_sub else 30
     y += name_line_h + 6

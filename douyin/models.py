@@ -88,6 +88,7 @@ class DouyinWorkInfo(BaseModel):
 
     # 封面
     cover: str = ""  # 封面URL
+    first_frame: str = ""  # 首帧URL
 
     # 作者信息
     author_uid: str = ""
@@ -172,9 +173,13 @@ class DouyinWorkInfo(BaseModel):
 
         # 封面
         cover_url = ""
-        cover = video.get("cover", {})
+        first_frame_url = ""
+        cover = video.get("cover_original_scale", {})
         if cover and cover.get("url_list"):
             cover_url = cover["url_list"][0]
+        first_frame = video.get("cover", {})
+        if first_frame and first_frame.get("url_list"):
+            first_frame_url = first_frame["url_list"][0]
 
         # 作者头像
         author_avatar = ""
@@ -190,6 +195,7 @@ class DouyinWorkInfo(BaseModel):
             duration=item.get("duration", 0),
             aweme_type=item.get("aweme_type", 0),
             cover=cover_url,
+            first_frame=first_frame_url,
             author_uid=str(author.get("uid", "")),
             author_sec_uid=author.get("sec_uid", ""),
             author_nickname=author.get("nickname", ""),
