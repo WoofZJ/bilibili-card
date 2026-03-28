@@ -106,6 +106,7 @@ class DouyinWorkInfo(BaseModel):
     comment_count: int = 0  # 评论
     collect_count: int = 0  # 收藏
     share_count: int = 0  # 分享
+    play_count: int = 0  # 观看
     recommend_count: int = 0  # 推荐
 
     video_size: int = 0  # 视频文件大小，单位字节
@@ -143,6 +144,8 @@ class DouyinWorkInfo(BaseModel):
 
     @staticmethod
     def format_count(n: int) -> str:
+        if n == 0:
+            return "--"
         if n >= 1000000:
             return f"{n / 10000:.0f}万"
         if n >= 10000:
@@ -189,7 +192,7 @@ class DouyinWorkInfo(BaseModel):
 
         return cls(
             aweme_id=str(item.get("aweme_id", "")),
-            title=item.get("item_title", ""),
+            title=item.get("desc", "--").split("#")[0].strip(),
             desc=item.get("desc", ""),
             create_time=item.get("create_time", 0),
             duration=item.get("duration", 0),
@@ -203,6 +206,7 @@ class DouyinWorkInfo(BaseModel):
             width=video.get("width", 0),
             height=video.get("height", 0),
             digg_count=statistics.get("digg_count", 0),
+            play_count=statistics.get("play_count", 0),
             comment_count=statistics.get("comment_count", 0),
             collect_count=statistics.get("collect_count", 0),
             share_count=statistics.get("share_count", 0),

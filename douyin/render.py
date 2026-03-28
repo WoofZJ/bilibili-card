@@ -8,8 +8,8 @@ from PIL import ImageFilter
 from douyin.models import DouyinWorkInfo, DouyinCommentsData, DouyinCommentItem
 
 # ── 常量 ──────────────────────────────────────────
-CARD_WIDTH = 736
-CARD_HEIGHT_BASE = 730
+CARD_WIDTH = 800
+CARD_HEIGHT_BASE = 735
 COVER_HEIGHT = 450  # 800 / 16 * 9
 PADDING = 16
 LINE_GAP = 10
@@ -572,7 +572,7 @@ def _draw_stat_item(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, label
     draw.text((val_x, y), value, fill=COLOR_STAT_VALUE, font=FONT_STAT_VALUE)
     lbl_w = FONT_STAT_LABEL.getlength(label)
     lbl_x = x + (width - lbl_w) / 2
-    draw.text((lbl_x, y + 36), label, fill=COLOR_STAT_LABEL, font=FONT_STAT_LABEL)
+    draw.text((lbl_x, y + 42), label, fill=COLOR_STAT_LABEL, font=FONT_STAT_LABEL)
 
 
 # ── 图片加载 ─────────────────────────────────────
@@ -769,7 +769,7 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
     text_y = y_cursor + (AVATAR_SIZE - FONT_BODY.size) // 2
     draw.text((PADDING + AVATAR_SIZE + PADDING, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY)
 
-    _draw_logo(canvas, str(_ASSETS_DIR / "douyin.png"), 650, y_cursor+5, AVATAR_SIZE-10)
+    _draw_logo(canvas, str(_ASSETS_DIR / "douyin.png"), 700, y_cursor, AVATAR_SIZE)
     y_cursor += AVATAR_SIZE + LINE_GAP
 
     # 发布时间、分辨率
@@ -797,6 +797,7 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
 
     # 数据统计
     stats = [
+        ("播放", DouyinWorkInfo.format_count(work.play_count)),
         ("点赞", DouyinWorkInfo.format_count(work.digg_count)),
         ("推荐", DouyinWorkInfo.format_count(work.recommend_count)),
         ("弹幕", DouyinWorkInfo.format_count(work.danmaku_count)),
@@ -809,7 +810,7 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
     for label, value in stats:
         _draw_stat_item(draw, x, y_cursor, item_width, label, value)
         x += item_width
-    y_cursor += FONT_STAT_LABEL.size + FONT_STAT_VALUE.size + LINE_GAP + 4
+    y_cursor += FONT_STAT_LABEL.size + FONT_STAT_VALUE.size + LINE_GAP*2
 
     _draw_copyright(draw, canvas, CARD_WIDTH // 2 - 100, y_cursor)
 
