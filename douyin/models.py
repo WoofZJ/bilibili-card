@@ -244,6 +244,7 @@ class DouyinCommentItem(BaseModel):
     level: int = 0  # 评论层级 1=一级 2=二级
     sticker_url: str = ""  # 表情贴纸URL
     sub_comments: list["DouyinCommentItem"] = []  # 子评论
+    image_list: list[str] = []  # 评论配图URL列表
 
     @property
     def create_time_str(self) -> str:
@@ -276,6 +277,14 @@ class DouyinCommentItem(BaseModel):
         if reply_comment and isinstance(reply_comment, list):
             for sub in reply_comment:
                 sub_comments.append(cls.from_api(sub))
+        
+        image_list = []
+        image_list_data = comment.get("image_list", []) or []
+        for img in image_list_data:
+            url_list = img.get("medium_url", {}).get("url_list", [])
+            if url_list:
+                image_list.append(url_list[0])
+
 
         return cls(
             cid=str(comment.get("cid", "")),
@@ -292,8 +301,8 @@ class DouyinCommentItem(BaseModel):
             is_author_digged=comment.get("is_author_digged", False),
             reply_comment_total=comment.get("reply_comment_total", 0),
             level=comment.get("level", 0),
-            sticker_url=sticker_url,
             sub_comments=sub_comments,
+            image_list=image_list,
         )
 
 

@@ -886,6 +886,8 @@ def _measure_comment_height(comment: DouyinCommentItem, content_width: int, is_s
     sticker_h = 0
     if comment.sticker_url and not is_sub:
         sticker_h = 120 + 8  # max_size + padding
+    if comment.image_list and not is_sub:
+        sticker_h = 120 + 8  # max_size + padding
 
     # meta 行（点赞、时间）
     meta_h = 28 if is_sub else 30
@@ -946,10 +948,21 @@ def _draw_single_comment(
     if comment.sticker_url and not is_sub:
         sticker = _load_sticker(comment.sticker_url)
         if sticker:
+            y += 4
             canvas.paste(sticker, (text_x, y), sticker)
-            y += sticker.size[1] + 8
+            y += sticker.size[1]
 
-    y += 8
+    y += 4
+
+    if comment.image_list and not is_sub:
+        for image_url in comment.image_list:
+            sticker = _load_sticker(image_url)
+            if sticker:
+                y += 4
+                canvas.paste(sticker, (text_x, y), sticker)
+                y += sticker.size[1]
+
+    y += 4
 
     # 底部 meta: 点赞数  时间  IP属地  回复数
     meta_x = text_x
