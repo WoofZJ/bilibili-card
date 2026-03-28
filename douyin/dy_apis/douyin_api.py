@@ -115,7 +115,7 @@ class DouyinAPI:
         """
         api = f"/aweme/v1/web/aweme/detail/"
         if 'video' in url:
-            aweme_id = url.split("/")[-1].split("?")[0]
+            aweme_id = url.split("?")[0].strip("/").split("/")[-1]
         else:
             aweme_id = re.findall(r'modal_id=(\d+)', url)[0]
             url = f'https://www.douyin.com/video/{aweme_id}'
