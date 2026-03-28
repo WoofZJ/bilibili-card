@@ -5,9 +5,14 @@
   logs/
     app.log              ← 主日志文件 (自动轮转, 单文件 5MB, 保留 5 份)
     archive/
-      video_info/        ← 视频信息 JSON 归档 (缓存未命中时)
-      comments/          ← 评论 JSON 归档 (缓存未命中时)
-      image/             ← 渲染图片归档 (缓存未命中时)
+      bilibili/
+        video_info/      ← B站视频信息 JSON 归档
+        comments/        ← B站评论 JSON 归档
+        image/           ← B站渲染图片归档
+      douyin/
+        work_info/       ← 抖音作品信息 JSON 归档
+        comments/        ← 抖音评论 JSON 归档
+        image/           ← 抖音渲染图片归档
 """
 
 import json
@@ -21,8 +26,12 @@ from pathlib import Path
 _LOG_DIR = Path(__file__).parent / "logs"
 _ARCHIVE_DIR = _LOG_DIR / "archive"
 
-for _sub in ("video_info", "comments", "image"):
-    (_ARCHIVE_DIR / _sub).mkdir(parents=True, exist_ok=True)
+for _platform, _subs in (
+    ("bilibili", ("video_info", "comments", "image")),
+    ("douyin", ("work_info", "comments", "image")),
+):
+    for _sub in _subs:
+        (_ARCHIVE_DIR / _platform / _sub).mkdir(parents=True, exist_ok=True)
 
 # ── Logger 配置 ───────────────────────────────────
 logger = logging.getLogger("bilibili_api")
@@ -60,33 +69,37 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d%H%M%S")
 
 
-def archive_json(category: str, name: str, data: dict) -> Path:
-    """归档 JSON 到 logs/archive/{category}/{name}.json
+def archive_json(platform: str, category: str, name: str, data: dict) -> Path:
+    """归档 JSON 到 logs/archive/{platform}/{category}/{name}.json
 
     Args:
+        platform: 平台名, 如 "bilibili" / "douyin"
         category: 子目录名, 如 "video_info" / "comments"
-        name: 文件名前缀, 通常为 bvid
+        name: 文件名前缀, 通常为 bvid 或 aweme_id
         data: 要序列化的字典
     Returns:
         写入的文件路径
     """
-    dest = _ARCHIVE_DIR / category / f"{name}.json"
+    dest = _ARCHIVE_DIR / platform / category / f"{name}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     logger.debug("JSON 已归档 → %s", dest)
     return dest
 
 
-def archive_image(name: str, img_bytes: bytes) -> Path:
-    """归档图片到 logs/archive/image/{name}.png
+def archive_image(platform: str, name: str, img_bytes: bytes) -> Path:
+    """归档图片到 logs/archive/{platform}/image/{name}.png
 
     Args:
-        name: 文件名前缀, 通常为 bvid 或 bvid_comments
+        platform: 平台名, 如 "bilibili" / "douyin"
+        name: 文件名前缀, 通常为 bvid 或 aweme_id
         img_bytes: PNG 图片字节
     Returns:
         写入的文件路径
     """
-    dest = _ARCHIVE_DIR / "image" / f"{name}.png"
+    dest = _ARCHIVE_DIR / platform / "image" / f"{name}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as f:
         f.write(img_bytes)
     logger.debug("图片已归档 → %s", dest)

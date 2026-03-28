@@ -17,7 +17,7 @@ from functools import partial
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
 
-from log import logger
+from log import logger, archive_json, archive_image
 from douyin.models import DouyinUserInfo, DouyinWorkInfo, DouyinCommentsData
 from douyin.render import render_to_bytes, render_comments_to_bytes
 
@@ -145,6 +145,7 @@ async def _fetch_work_info(url: str) -> DouyinWorkInfo:
         raw = await _run_sync(DouyinAPI.get_work_info, auth, url)
         aweme_detail = raw.get("aweme_detail", raw)
         result = DouyinWorkInfo.from_api(aweme_detail)
+        archive_json("douyin", "work_info", result.aweme_id, aweme_detail)
         logger.info("抖音 API 请求完成: get_work_info aweme_id=%s", result.aweme_id)
     except HTTPException:
         raise
@@ -170,6 +171,7 @@ async def _fetch_comments(url: str) -> DouyinCommentsData:
     try:
         raw = await _run_sync(DouyinAPI.get_work_out_comment, auth, url)
         result = DouyinCommentsData.from_api(raw)
+        archive_json("douyin", "comments", url.rstrip("/").split("/")[-1], raw if isinstance(raw, dict) else {"comments": raw})
         logger.info("抖音 API 请求完成: get_work_out_comment, 评论数=%d", len(result.comments))
     except HTTPException:
         raise
@@ -209,6 +211,7 @@ async def get_work_info_image(
 ):
     work_info = await _fetch_work_info(url)
     img_bytes = render_to_bytes(work_info)
+    archive_image("douyin", work_info.aweme_id, img_bytes)
     return Response(content=img_bytes, media_type="image/png")
 
 
@@ -228,4 +231,5 @@ async def get_work_comments_image(
     if not comments_data.comments:
         raise HTTPException(status_code=404, detail="该作品没有可见评论")
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
+    archive_image("douyin", f"{url.rstrip('/').split('/')[-1]}_comments", img_bytes)
     return Response(content=img_bytes, media_type="image/png")

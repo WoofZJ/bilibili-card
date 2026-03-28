@@ -84,7 +84,7 @@ async def _fetch_video_by_bvid(bvid: str) -> VideoInfo:
         v = video.Video(bvid)
         info = await v.get_info()
         danmakus = await v.get_danmaku_snapshot()
-        archive_json("video_info", bvid, info)
+        archive_json("bilibili", "video_info", bvid, info)
         logger.info("API 请求完成: get_info bvid=%s", bvid)
     except Exception as e:
         logger.error("API 请求失败: get_info bvid=%s: %s", bvid, e)
@@ -147,7 +147,7 @@ async def _fetch_comments(bvid: str) -> CommentsData:
         comments_raw = await comment.get_comments_lazy(
             aid, type_=comment.CommentResourceType.VIDEO, order=comment.OrderType.LIKE
         )
-        archive_json("comments", bvid, comments_raw)
+        archive_json("bilibili", "comments", bvid, comments_raw)
         logger.info("API 请求完成: get_comments bvid=%s", bvid)
     except Exception as e:
         logger.error("API 请求失败: get_comments bvid=%s: %s", bvid, e)
@@ -169,7 +169,7 @@ async def get_latest_video_image(user_id: int = Query(..., description="B站用�
     video_info = await _fetch_latest_video(user_id)
     danmaku_list = _cache_get(f"danmaku:{video_info.bvid}")
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
-    archive_image(video_info.bvid, img_bytes)
+    archive_image("bilibili", video_info.bvid, img_bytes)
     return Response(content=img_bytes, media_type="image/png")
 
 
@@ -184,7 +184,7 @@ async def get_video_info_image(bvid: str = Query(..., description="视频BV号",
     video_info = await _fetch_video_by_bvid(bvid)
     danmaku_list = _cache_get(f"danmaku:{bvid}")
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
-    archive_image(bvid, img_bytes)
+    archive_image("bilibili", bvid, img_bytes)
     return Response(content=img_bytes, media_type="image/png")
 
 
@@ -212,5 +212,5 @@ async def get_video_comments_image(
     if comments_data.total == 0 or (not comments_data.top_comment and not comments_data.comments):
         raise HTTPException(status_code=404, detail="该视频没有可见评论")
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
-    archive_image(f"{bvid}_comments", img_bytes)
+    archive_image("bilibili", f"{bvid}_comments", img_bytes)
     return Response(content=img_bytes, media_type="image/png")
