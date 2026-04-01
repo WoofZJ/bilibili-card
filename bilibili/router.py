@@ -14,7 +14,7 @@ B站视频信息 API 路由
 
 import time
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 
 from bilibili_api import user, video, search, get_real_url, comment
@@ -30,6 +30,44 @@ router = APIRouter(prefix="/bilibili", tags=["bilibili"])
 # ── 缓存 ──────────────────────────────────────────
 _CACHE_TTL = 60  # 缓存有效期（秒）
 _cache: dict[str, tuple[float, object]] = {}  # key -> (expire_ts, data)
+
+# ── 频率限制 ─────────────────────────────────────
+_RATE_LIMIT_SECONDS = 5
+_rate_limit_state: dict[str, float] = {}
+
+
+def _client_identity(request: Request) -> str:
+    """提取客户端标识，优先使用反向代理透传的真实IP。"""
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if xff:
+        return xff.split(",", 1)[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def _enforce_rate_limit(request: Request, bucket: str, interval: int = _RATE_LIMIT_SECONDS) -> None:
+    """限制同一客户端对同一资源的最小调用间隔。"""
+    now = time.monotonic()
+    client = _client_identity(request)
+    key = f"{bucket}:{client}"
+    last_ts = _rate_limit_state.get(key)
+    if last_ts is not None:
+        wait = interval - (now - last_ts)
+        if wait > 0:
+            retry_after = max(1, int(wait + 0.999))
+            logger.warning(
+                "请求被限流: bucket=%s client=%s retry_after=%ss",
+                bucket,
+                client,
+                retry_after,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"请求过于频繁，请至少间隔 {interval} 秒后重试",
+                headers={"Retry-After": str(retry_after)},
+            )
+    _rate_limit_state[key] = now
 
 
 def _cache_get(key: str):
@@ -160,12 +198,20 @@ async def _fetch_comments(bvid: str) -> CommentsData:
 
 # ── API 端点 ──────────────────────────────────────
 @router.get("/video/latest", response_model=VideoInfo, summary="获取用户最新视频信息")
-async def get_latest_video(user_id: int = Query(..., description="B站用户ID", examples=[1137066730])):
+async def get_latest_video(
+    request: Request,
+    user_id: int = Query(..., description="B站用户ID", examples=[1137066730]),
+):
+    _enforce_rate_limit(request, "video/latest")
     return await _fetch_latest_video(user_id)
 
 
 @router.get("/video/latest/image", summary="获取用户最新视频信息卡片图片")
-async def get_latest_video_image(user_id: int = Query(..., description="B站用户ID", examples=[1137066730])):
+async def get_latest_video_image(
+    request: Request,
+    user_id: int = Query(..., description="B站用户ID", examples=[1137066730]),
+):
+    _enforce_rate_limit(request, "video/latest/image")
     video_info = await _fetch_latest_video(user_id)
     danmaku_list = _cache_get(f"danmaku:{video_info.bvid}")
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
@@ -174,13 +220,21 @@ async def get_latest_video_image(user_id: int = Query(..., description="B站用�
 
 
 @router.get("/video/info", response_model=VideoInfo, summary="根据BV号获取视频信息")
-async def get_video_info(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
+async def get_video_info(
+    request: Request,
+    bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
+):
+    _enforce_rate_limit(request, "video/info")
     logger.info("收到请求: /video/info bvid=%s", bvid)
     return await _fetch_video_by_bvid(bvid)
 
 
 @router.get("/video/info/image", summary="根据BV号获取视频信息卡片图片")
-async def get_video_info_image(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
+async def get_video_info_image(
+    request: Request,
+    bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
+):
+    _enforce_rate_limit(request, "video/info/image")
     video_info = await _fetch_video_by_bvid(bvid)
     danmaku_list = _cache_get(f"danmaku:{bvid}")
     img_bytes = render_to_bytes(video_info, danmaku_list=danmaku_list)
@@ -189,25 +243,39 @@ async def get_video_info_image(bvid: str = Query(..., description="视频BV号",
 
 
 @router.get("/user/id", summary="根据用户名获取用户ID")
-async def get_user_id(username: str = Query(..., description="B站用户名", examples=["某某UP主"])):
+async def get_user_id(
+    request: Request,
+    username: str = Query(..., description="B站用户名", examples=["某某UP主"]),
+):
+    _enforce_rate_limit(request, "user/id")
     return await _fetch_uid_by_name(username)
 
 
 @router.get("/video/info/short_url", summary="根据短链接获取视频信息")
-async def get_video_info_short_url(short_url: str = Query(..., description="视频短链接", examples=["https://b23.tv/xxxx"])):
+async def get_video_info_short_url(
+    request: Request,
+    short_url: str = Query(..., description="视频短链接", examples=["https://b23.tv/xxxx"]),
+):
+    _enforce_rate_limit(request, "video/info/short_url")
     return await _fetch_video_by_short_url(short_url)
 
 
 @router.get("/video/comments", summary="获取视频热门评论 JSON")
-async def get_video_comments(bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"])):
+async def get_video_comments(
+    request: Request,
+    bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
+):
+    _enforce_rate_limit(request, "video/comments")
     return await _fetch_comments(bvid)
 
 
 @router.get("/video/comments/image", summary="获取视频热门评论卡片图片")
 async def get_video_comments_image(
+    request: Request,
     bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
     max_comments: int = Query(15, description="最多显示评论数", ge=1, le=50),
 ):
+    _enforce_rate_limit(request, "video/comments/image")
     comments_data = await _fetch_comments(bvid)
     if comments_data.total == 0 or (not comments_data.top_comment and not comments_data.comments):
         raise HTTPException(status_code=404, detail="该视频没有可见评论")
