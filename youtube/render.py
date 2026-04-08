@@ -8,7 +8,7 @@ from youtube.models import YouTubeVideoInfo, YouTubeCommentItem, YouTubeComments
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
-CARD_HEIGHT_BASE = 636
+CARD_HEIGHT_BASE = 730
 COVER_HEIGHT = 450  # 800 / 16 * 9
 PADDING = 16
 LINE_GAP = 10
@@ -332,14 +332,7 @@ def render_video_card(video: YouTubeVideoInfo, download_cover: bool = True) -> I
     title_line_height = 48
     title_height = len(title_lines) * title_line_height
 
-    # 描述行
-    desc_lines = []
-    if video.description:
-        desc_lines, _ = _wrap_text(video.description, FONT_SMALL, content_width, max_lines=3)
-    desc_line_height = 32
-    desc_height = len(desc_lines) * desc_line_height if desc_lines else 0
-
-    total_height = CARD_HEIGHT_BASE + title_height + desc_height
+    total_height = CARD_HEIGHT_BASE + title_height
 
     canvas = Image.new("RGBA", (CARD_WIDTH, total_height), (0, 0, 0, 0))
 
