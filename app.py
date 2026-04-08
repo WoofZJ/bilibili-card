@@ -50,9 +50,11 @@ app = FastAPI(
 # ── 注册路由 ──────────────────────────────────────
 from bilibili.router import router as bilibili_router
 from douyin.router import router as douyin_router
+from youtube.router import router as youtube_router
 
 app.include_router(bilibili_router)
 app.include_router(douyin_router)
+app.include_router(youtube_router)
 
 
 @app.get("/health")
