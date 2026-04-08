@@ -236,7 +236,7 @@ async def get_video_info_by_url_image(
     request: Request,
     url: str = Query(..., description="YouTube视频链接", examples=["https://youtu.be/DEVIeLuFXQY"]),
 ):
-    _enforce_rate_limit(request, "yt/video/info/url")
+    _enforce_rate_limit(request, "yt/video/info/url/image")
     video_id = _extract_video_id(url)
     video_info = await _fetch_video_by_id(video_id)
     img_bytes = render_to_bytes(video_info)
