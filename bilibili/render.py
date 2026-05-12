@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from bilibili.models import VideoInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
+from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
@@ -25,6 +25,8 @@ COLOR_STAT_LABEL = (153, 153, 153)
 COLOR_STAT_VALUE = (51, 51, 51)
 COLOR_DURATION_BG = (0, 0, 0, 180)
 COLOR_DURATION_TEXT = (255, 255, 255)
+COLOR_LIVE_STATUS_BG = (251, 114, 153, 230)
+COLOR_LIVE_OFFLINE_BG = (0, 0, 0, 180)
 COLOR_DIVIDER = (240, 240, 240)
 COLOR_OVERFLOW = (120, 120, 120)
 COLOR_LINK = (0x00, 0x6B, 0xDE) # 链接颜色
@@ -975,6 +977,42 @@ def _draw_copyright(draw: Image.Image, canvas: ImageDraw.ImageDraw, x: int, y: i
     text_w = FONT_SMALL.getlength(text)
     x += int(text_w)
 
+
+def _draw_cover_label(
+    canvas: Image.Image,
+    text: str,
+    x: int,
+    y: int,
+    font: ImageFont.FreeTypeFont,
+    bg_color,
+    text_color=COLOR_DURATION_TEXT,
+    radius: int = 6,
+) -> int:
+    """在封面上绘制半透明标签，返回标签宽度。"""
+    bbox = font.getbbox(text)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    pad_x, pad_y = 12, 6
+    width = tw + pad_x * 2
+    height = th + pad_y * 2
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    overlay_draw.rounded_rectangle((0, 0, width, height), radius=radius, fill=bg_color)
+    overlay_draw.text((pad_x, pad_y - 5), text, fill=text_color, font=font)
+    canvas.paste(overlay, (x, y), overlay)
+    return width
+
+
+def _load_first_cover(urls: list[str]) -> Image.Image:
+    """按顺序加载第一张可用封面，全部失败时返回占位图。"""
+    for url in urls:
+        if not url:
+            continue
+        cover = _load_cover(url)
+        if cover is not None:
+            return cover
+    return _create_placeholder_cover()
+
+
 # ── 主渲染函数 ────────────────────────────────────
 def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_list: list[str] | None = None) -> Image.Image:
     """
@@ -1124,6 +1162,141 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
 def render_to_bytes(video: VideoInfo, fmt: str = "PNG", download_cover: bool = True, danmaku_list: list[str] | None = None) -> bytes:
     """渲染并返回图片字节数据"""
     img = render_video_card(video, download_cover=download_cover, danmaku_list=danmaku_list)
+    buf = io.BytesIO()
+    img.save(buf, format=fmt, quality=95)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def render_live_room_card(live_room: LiveRoomInfo, download_cover: bool = True) -> Image.Image:
+    """
+    将 LiveRoomInfo 渲染为直播间卡片图片
+
+    Args:
+        live_room: 直播间信息
+        download_cover: 是否下载关键帧/封面图片（False 时使用占位图）
+
+    Returns:
+        PIL.Image.Image 对象
+    """
+    content_width = CARD_WIDTH - PADDING * 2
+
+    title = live_room.title or "未命名直播间"
+    title_lines = _wrap_text(title, FONT_TITLE, content_width, max_lines=5)
+    title_line_height = 48
+    title_height = len(title_lines) * title_line_height
+    total_height = CARD_HEIGHT_BASE + title_height
+
+    canvas = Image.new("RGBA", (CARD_WIDTH, total_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle((0, 0, CARD_WIDTH, total_height), fill=(255, 255, 255))
+
+    # draw live preview, keyframe first and room cover as fallback
+    if download_cover:
+        cover = _load_first_cover([live_room.preview_image, live_room.cover])
+    else:
+        cover = _create_placeholder_cover()
+    cover_rgba = cover.convert("RGBA")
+    canvas.paste(cover_rgba, (0, 0), cover_rgba)
+
+    # draw area label
+    area_text = _truncate_text(live_room.area_str, FONT_SMALL, 360)
+    area_width = int(FONT_SMALL.getlength(area_text) + PADDING * 2)
+    area_height = int(FONT_SMALL.size)
+    if area_text:
+        _draw_cover_label(canvas, area_text, CARD_WIDTH - area_width - PADDING // 2, COVER_HEIGHT - PADDING - area_height, FONT_SMALL, (0, 0, 0, 150), radius=4)
+
+    # draw title
+    y_cursor = COVER_HEIGHT + LINE_GAP
+    for line in title_lines:
+        _draw_text_with_fallback(draw, (PADDING, y_cursor), line, fill=COLOR_TITLE, font=FONT_TITLE, canvas=canvas)
+        y_cursor += title_line_height
+
+    y_cursor += LINE_GAP
+
+    # draw anchor
+    avatar = None
+    if download_cover and live_room.anchor_face:
+        avatar = _load_avatar(live_room.anchor_face, AVATAR_SIZE)
+    if not avatar:
+        avatar = _create_placeholder_avatar(AVATAR_SIZE)
+    canvas.paste(avatar, (PADDING, y_cursor), avatar)
+
+    author_x = PADDING + AVATAR_SIZE + PADDING
+    max_author_width = 670 - author_x - PADDING
+    author_text = _truncate_text(live_room.anchor_name or "未知主播", FONT_BODY, max_author_width)
+    text_y = y_cursor + (AVATAR_SIZE - FONT_BODY.size) // 2
+    text_w = FONT_BODY.getlength(author_text)
+    _draw_text_with_fallback(draw, (author_x, text_y), author_text, fill=COLOR_ACCENT, font=FONT_BODY, canvas=canvas)
+
+    # draw live status label
+    status_text = live_room.live_status_str
+    status_bbox = FONT_DURATION.getbbox(status_text)
+    status_th = status_bbox[3] - status_bbox[1]
+    status_pad_x, status_pad_y = 12, 6
+    status_h = status_th + status_pad_y * 2
+    status_bg = COLOR_LIVE_STATUS_BG if live_room.live_status == 1 else COLOR_LIVE_OFFLINE_BG
+    _draw_cover_label(
+        canvas,
+        status_text,
+        int(author_x + text_w + PADDING),
+        int(text_y + (FONT_BODY.size - status_h) // 2),
+        FONT_DURATION,
+        status_bg,
+    )
+    _draw_logo(canvas, str(_ASSETS_DIR / "bilibili.png"), 670, y_cursor + 5, AVATAR_SIZE - 10)
+    y_cursor += AVATAR_SIZE + LINE_GAP
+
+    # draw live metadata
+    if live_room.live_status == 1 and live_room.live_start_time > 0:
+        time_part = f"开播于 {live_room.live_start_time_str}"
+    else:
+        time_part = f"状态：{live_room.live_status_str}"
+    meta_parts = [time_part, f"直播间号：{live_room.display_room_id}"]
+    meta_text = _truncate_text(" | ".join(meta_parts), FONT_SMALL, content_width)
+    draw.text((PADDING, y_cursor), meta_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
+    y_cursor += FONT_SMALL.size + LINE_GAP + 4
+
+    # draw divider
+    draw.line((PADDING, y_cursor, CARD_WIDTH - PADDING, y_cursor), fill=COLOR_DIVIDER, width=2)
+    y_cursor += LINE_GAP + 4
+
+    # draw data snapshot time
+    snapshot_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    snapshot_text = f"截止于 {snapshot_time} 的直播间数据："
+    snapshot_w = FONT_SMALL.getlength(snapshot_text)
+    draw.text(((CARD_WIDTH - snapshot_w) / 2, y_cursor), snapshot_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
+    y_cursor += FONT_SMALL.size + LINE_GAP
+
+    popularity_value = live_room.popularity_text.strip()
+    if popularity_value.endswith("人气"):
+        popularity_value = popularity_value[:-2]
+    if not popularity_value:
+        popularity_value = LiveRoomInfo.format_count(live_room.popularity)
+
+    stats = [
+        ("人气", popularity_value),
+        ("看过", LiveRoomInfo.format_count(live_room.watched)),
+        ("点赞", LiveRoomInfo.format_count(live_room.likes)),
+        ("关注", LiveRoomInfo.format_count(live_room.attention)),
+        ("粉丝团", LiveRoomInfo.format_count(live_room.fansclub)),
+        ("等级", f"Lv{live_room.anchor_level}" if live_room.anchor_level > 0 else "-"),
+    ]
+    item_width = content_width // len(stats)
+    x = PADDING
+    for label, value in stats:
+        _draw_stat_item(draw, x, y_cursor, item_width, label, value)
+        x += item_width
+    y_cursor += 80
+
+    _draw_copyright(draw, canvas, CARD_WIDTH // 2 - 100, y_cursor)
+
+    return canvas.convert("RGB")
+
+
+def render_live_room_to_bytes(live_room: LiveRoomInfo, fmt: str = "PNG", download_cover: bool = True) -> bytes:
+    """渲染直播间卡片并返回图片字节数据"""
+    img = render_live_room_card(live_room, download_cover=download_cover)
     buf = io.BytesIO()
     img.save(buf, format=fmt, quality=95)
     buf.seek(0)

@@ -258,3 +258,120 @@ class VideoInfo(BaseModel):
             height=dim.get("height", 0),
             staffs=[Staff(**s) for s in info.get("staff", [])]
         )
+
+
+class LiveRoomInfo(BaseModel):
+    """B站直播间信息模型"""
+    uid: int = 0
+    room_id: int = 0
+    short_id: int = 0
+    title: str = ""
+    cover: str = ""
+    keyframe: str = ""
+    description: str = ""
+    live_status: int = 0
+    live_start_time: int = 0
+    area_name: str = ""
+    parent_area_name: str = ""
+
+    # 主播信息
+    anchor_name: str = ""
+    anchor_face: str = ""
+
+    # 数据统计
+    popularity: int = 0
+    popularity_text: str = ""
+    watched: int = 0
+    likes: int = 0
+    attention: int = 0
+    anchor_level: int = 0
+    medal_name: str = ""
+    fansclub: int = 0
+
+    @property
+    def display_room_id(self) -> int:
+        """优先展示短号，没有短号时展示真实房间号"""
+        return self.short_id or self.room_id
+
+    @property
+    def live_status_str(self) -> str:
+        """直播状态标签"""
+        if self.live_status == 1:
+            return "直播中"
+        if self.live_status == 2:
+            return "轮播中"
+        return "未开播"
+
+    @property
+    def live_start_time_str(self) -> str:
+        """格式化开播时间"""
+        if self.live_start_time <= 0:
+            return "未开播"
+        return datetime.fromtimestamp(self.live_start_time).strftime("%Y-%m-%d %H:%M")
+
+    @property
+    def area_str(self) -> str:
+        """分区标签"""
+        if self.parent_area_name and self.area_name:
+            return f"{self.parent_area_name}/{self.area_name}"
+        return self.area_name or self.parent_area_name
+
+    @property
+    def preview_image(self) -> str:
+        """优先使用直播关键帧作为卡片大图"""
+        return self.keyframe or self.cover
+
+    @staticmethod
+    def format_count(n: int) -> str:
+        """格式化数字"""
+        return VideoInfo.format_count(n)
+
+    @classmethod
+    def from_api(cls, info: dict) -> "LiveRoomInfo":
+        """从 bilibili_api live.LiveRoom.get_room_info() 数据构造"""
+        if "data" in info and isinstance(info["data"], dict) and "room_info" not in info:
+            info = info["data"]
+
+        room = info.get("room_info", {}) or {}
+        anchor = info.get("anchor_info", {}) or {}
+        base = anchor.get("base_info", {}) or {}
+        live_info = anchor.get("live_info", {}) or {}
+        relation = anchor.get("relation_info", {}) or {}
+        medal = anchor.get("medal_info", {}) or {}
+        watched = info.get("watched_show", {}) or {}
+        like_info = info.get("like_info_v3", {}) or {}
+        popularity = info.get("popularity", {}) or {}
+        news = info.get("news_info", {}) or {}
+
+        def _to_int(value, default: int = 0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        popularity_value = popularity.get("popularity", room.get("online", 0))
+        description = room.get("description") or news.get("content") or ""
+
+        return cls(
+            uid=_to_int(room.get("uid", 0)),
+            room_id=_to_int(room.get("room_id", 0)),
+            short_id=_to_int(room.get("short_id", 0)),
+            title=room.get("title") or "",
+            cover=room.get("cover") or "",
+            keyframe=room.get("keyframe") or "",
+            description=str(description).strip(),
+            live_status=_to_int(room.get("live_status", 0)),
+            live_start_time=_to_int(room.get("live_start_time", 0)),
+            area_name=room.get("area_name") or "",
+            parent_area_name=room.get("parent_area_name") or "",
+            anchor_name=base.get("uname") or "",
+            anchor_face=base.get("face") or "",
+            popularity=_to_int(popularity_value),
+            popularity_text=popularity.get("popularity_text") or "",
+            watched=_to_int(watched.get("num", 0)),
+            likes=_to_int(like_info.get("total_likes", 0)),
+            attention=_to_int(relation.get("attention", 0)),
+            anchor_level=_to_int(live_info.get("level", 0)),
+            medal_name=medal.get("medal_name") or "",
+            fansclub=_to_int(medal.get("fansclub", 0)),
+        )

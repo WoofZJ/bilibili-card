@@ -10,6 +10,8 @@ B站视频信息 API 路由
   GET  /user/id?username=xxx              根据用户名获取用户ID
   GET  /video/comments?bvid=xxx           获取视频热门评论 JSON
   GET  /video/comments/image?bvid=xxx     获取视频热门评论卡片图片
+  GET  /live/room?room_id=xxx             获取直播间 JSON
+  GET  /live/room/image?room_id=xxx       获取直播间卡片图片
 """
 
 import time
@@ -17,10 +19,10 @@ import time
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 
-from bilibili_api import user, video, search, get_real_url, comment
+from bilibili_api import user, video, search, get_real_url, comment, live
 
-from bilibili.models import VideoInfo, CommentsData
-from bilibili.render import render_to_bytes, render_comments_to_bytes
+from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData
+from bilibili.render import render_to_bytes, render_live_room_to_bytes, render_comments_to_bytes
 from log import logger, archive_json, archive_image
 
 
@@ -196,6 +198,27 @@ async def _fetch_comments(bvid: str) -> CommentsData:
     return result
 
 
+async def _fetch_live_room(room_id: int) -> LiveRoomInfo:
+    """获取直播间信息（带缓存）"""
+    cache_key = f"live_room:{room_id}"
+    if cached := _cache_get(cache_key):
+        logger.info("缓存命中: live_room room_id=%s", room_id)
+        return cached
+
+    try:
+        room = live.LiveRoom(room_id)
+        info = await room.get_room_info()
+        archive_json("bilibili", "live_room_info", str(room_id), info)
+        logger.info("API 请求完成: get_room_info room_id=%s", room_id)
+    except Exception as e:
+        logger.error("API 请求失败: get_room_info room_id=%s: %s", room_id, e)
+        raise HTTPException(status_code=502, detail=f"获取直播间信息失败: {e}")
+
+    result = LiveRoomInfo.from_api(info)
+    _cache_set(cache_key, result, ttl=30)
+    return result
+
+
 # ── API 端点 ──────────────────────────────────────
 @router.get("/video/latest", response_model=VideoInfo, summary="获取用户最新视频信息")
 async def get_latest_video(
@@ -281,4 +304,25 @@ async def get_video_comments_image(
         raise HTTPException(status_code=404, detail="该视频没有可见评论")
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
     archive_image("bilibili", f"{bvid}_comments", img_bytes)
+    return Response(content=img_bytes, media_type="image/png")
+
+
+@router.get("/live/room", response_model=LiveRoomInfo, summary="获取直播间信息")
+async def get_live_room(
+    request: Request,
+    room_id: int = Query(..., description="直播间房间号", examples=[1863475727]),
+):
+    _enforce_rate_limit(request, "live/room")
+    return await _fetch_live_room(room_id)
+
+
+@router.get("/live/room/image", summary="获取直播间卡片图片")
+async def get_live_room_image(
+    request: Request,
+    room_id: int = Query(..., description="直播间房间号", examples=[1863475727]),
+):
+    _enforce_rate_limit(request, "live/room/image")
+    live_room = await _fetch_live_room(room_id)
+    img_bytes = render_live_room_to_bytes(live_room)
+    archive_image("bilibili", f"live_{live_room.room_id or room_id}", img_bytes)
     return Response(content=img_bytes, media_type="image/png")
