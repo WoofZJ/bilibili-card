@@ -1252,7 +1252,7 @@ def render_live_room_card(live_room: LiveRoomInfo, download_cover: bool = True) 
         time_part = f"开播于 {live_room.live_start_time_str}"
     else:
         time_part = f"状态：{live_room.live_status_str}"
-    meta_parts = [time_part, f"直播间号：{live_room.display_room_id}"]
+    meta_parts = [time_part, f"房间号：{live_room.display_room_id}", f"等级：Lv{live_room.anchor_level}" if live_room.anchor_level > 0 else "等级：-"]
     meta_text = _truncate_text(" | ".join(meta_parts), FONT_SMALL, content_width)
     draw.text((PADDING, y_cursor), meta_text, fill=COLOR_DESC_TEXT, font=FONT_SMALL)
     y_cursor += FONT_SMALL.size + LINE_GAP + 4
@@ -1280,7 +1280,7 @@ def render_live_room_card(live_room: LiveRoomInfo, download_cover: bool = True) 
         ("点赞", LiveRoomInfo.format_count(live_room.likes)),
         ("关注", LiveRoomInfo.format_count(live_room.attention)),
         ("粉丝团", LiveRoomInfo.format_count(live_room.fansclub)),
-        ("等级", f"Lv{live_room.anchor_level}" if live_room.anchor_level > 0 else "-"),
+        ("大航海", LiveRoomInfo.format_count(live_room.guard_count)),
     ]
     item_width = content_width // len(stats)
     x = PADDING

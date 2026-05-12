@@ -273,6 +273,7 @@ class LiveRoomInfo(BaseModel):
     live_start_time: int = 0
     area_name: str = ""
     parent_area_name: str = ""
+    guard_count: int = 0
 
     # 主播信息
     anchor_name: str = ""
@@ -342,6 +343,7 @@ class LiveRoomInfo(BaseModel):
         like_info = info.get("like_info_v3", {}) or {}
         popularity = info.get("popularity", {}) or {}
         news = info.get("news_info", {}) or {}
+        guard_info = info.get("guard_info", {}) or {}
 
         def _to_int(value, default: int = 0) -> int:
             try:
@@ -374,4 +376,5 @@ class LiveRoomInfo(BaseModel):
             anchor_level=_to_int(live_info.get("level", 0)),
             medal_name=medal.get("medal_name") or "",
             fansclub=_to_int(medal.get("fansclub", 0)),
+            guard_count=_to_int(guard_info.get("count", 0))
         )
