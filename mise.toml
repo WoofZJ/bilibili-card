@@ -1,0 +1,6 @@
+[tools]
+python = "latest"
+
+[tasks.run]
+description = "Run the application"
+run = "python -m uvicorn app:app --port 54547 --host 127.0.0.1"
