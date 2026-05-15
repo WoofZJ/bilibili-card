@@ -326,3 +326,12 @@ async def get_live_room_image(
     img_bytes = render_live_room_to_bytes(live_room)
     archive_image("bilibili", f"live_{live_room.room_id or room_id}", img_bytes)
     return Response(content=img_bytes, media_type="image/png")
+
+@router.get("/resolve", summary="解析任意B站短链接")
+async def resolve_short_link(
+    request: Request,
+    short_url: str = Query(..., description="B站短链接", examples=["https://b23.tv/xxxx"]),
+):
+    real_url = await get_real_url(short_url)
+    logger.info("短链接解析: %s -> %s", short_url, real_url)
+    return real_url
