@@ -14,12 +14,15 @@ B站视频信息 API 路由
   GET  /live/room/image?room_id=xxx       获取直播间卡片图片
 """
 
+import os
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
+from dotenv import load_dotenv
 
-from bilibili_api import user, video, search, get_real_url, comment, live
+from bilibili_api import user, video, search, get_real_url, comment, live, Credential
 
 from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData
 from bilibili.render import render_to_bytes, render_live_room_to_bytes, render_comments_to_bytes
@@ -29,6 +32,39 @@ from log import logger, archive_json, archive_image
 router = APIRouter(prefix="/bilibili", tags=["bilibili"])
 
 
+# ── B站凭证 ───────────────────────────────────────
+_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(_ENV_PATH)
+
+
+def _env_value(*names: str):
+    """按候选变量名从环境中读取第一个非空值。"""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+_credential_fields = {
+    "sessdata": _env_value("SESSDATA", "SESSION_DATA", "BILI_SESSDATA"),
+    "bili_jct": _env_value("BILI_JCT", "bili_jct"),
+    "buvid3": _env_value("BUVID3", "buvid3"),
+    "buvid4": _env_value("BUVID4", "buvid4"),
+    "dedeuserid": _env_value("DEDEUSERID", "DEDE_USER_ID", "DedeUserID"),
+    "ac_time_value": _env_value("AC_TIME_VALUE", "ac_time_value"),
+}
+_credential = Credential(**_credential_fields)
+
+_loaded_credential_fields = [
+    name for name, value in _credential_fields.items() if value
+]
+if _loaded_credential_fields:
+    logger.info("B站 Credential 已加载字段: %s", ", ".join(_loaded_credential_fields))
+else:
+    logger.warning("B站 Credential 未配置，将使用匿名凭证调用公开 API")
+
+
 # ── 缓存 ──────────────────────────────────────────
 _CACHE_TTL = 60  # 缓存有效期（秒）
 _cache: dict[str, tuple[float, object]] = {}  # key -> (expire_ts, data)
@@ -36,7 +72,6 @@ _cache: dict[str, tuple[float, object]] = {}  # key -> (expire_ts, data)
 # ── 频率限制 ─────────────────────────────────────
 _RATE_LIMIT_SECONDS = 5
 _rate_limit_state: dict[str, float] = {}
-
 
 def _client_identity(request: Request) -> str:
     """提取客户端标识，优先使用反向代理透传的真实IP。"""
@@ -95,7 +130,7 @@ async def _fetch_latest_video(user_id: int) -> VideoInfo:
         return cached
 
     try:
-        u = user.User(user_id)
+        u = user.User(user_id, credential=_credential)
         page = await u.get_videos(ps=1)
         logger.info("API 请求完成: get_videos user_id=%s", user_id)
     except Exception as e:
@@ -121,7 +156,7 @@ async def _fetch_video_by_bvid(bvid: str) -> VideoInfo:
         return cached
 
     try:
-        v = video.Video(bvid)
+        v = video.Video(bvid=bvid)
         info = await v.get_info()
         danmakus = await v.get_danmaku_snapshot()
         archive_json("bilibili", "video_info", bvid, info)
@@ -182,10 +217,12 @@ async def _fetch_comments(bvid: str) -> CommentsData:
         return cached
 
     try:
-        v = video.Video(bvid)
+        v = video.Video(bvid=bvid)
         aid = v.get_aid()
         comments_raw = await comment.get_comments_lazy(
-            aid, type_=comment.CommentResourceType.VIDEO, order=comment.OrderType.LIKE
+            aid,
+            type_=comment.CommentResourceType.VIDEO,
+            order=comment.OrderType.LIKE
         )
         archive_json("bilibili", "comments", bvid, comments_raw)
         logger.info("API 请求完成: get_comments bvid=%s", bvid)
@@ -206,7 +243,7 @@ async def _fetch_live_room(room_id: int) -> LiveRoomInfo:
         return cached
 
     try:
-        room = live.LiveRoom(room_id)
+        room = live.LiveRoom(room_id, credential=_credential)
         info = await room.get_room_info()
         archive_json("bilibili", "live_room_info", str(room_id), info)
         logger.info("API 请求完成: get_room_info room_id=%s", room_id)
