@@ -30,6 +30,7 @@ for _platform, _subs in (
     ("bilibili", ("video_info", "comments", "image")),
     ("douyin", ("work_info", "comments", "image")),
     ("youtube", ("video_info", "comments", "image")),
+    ("xiaoheihe", ("post_info", "comments", "image")),
 ):
     for _sub in _subs:
         (_ARCHIVE_DIR / _platform / _sub).mkdir(parents=True, exist_ok=True)
