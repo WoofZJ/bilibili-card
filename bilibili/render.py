@@ -1,6 +1,7 @@
 import io
 import re
 import random
+import qrcode
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -299,6 +300,15 @@ def _draw_stat_item(draw: ImageDraw.ImageDraw, x: int, y: int, item_width: int, 
     draw.text((x+item_width//2 - label_w//2, y + 42), label, fill=COLOR_STAT_LABEL, font=FONT_STAT_LABEL)
     label_w = FONT_STAT_LABEL.getlength(label)
     return int(max(val_w, label_w)) + 40
+
+
+def _draw_qrcode(canvas: Image.Image, url: str, x: int, y_bottom: int, box_size: int):
+    """生成二维码并绘制到画布上"""
+    qr = qrcode.QRCode(version=1, box_size=box_size, border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color=COLOR_ACCENT, back_color="white").convert("RGBA")
+    canvas.paste(img, (x, y_bottom - img.height), img)
 
 
 # ── 头像处理 ─────────────────────────────────────
@@ -1063,6 +1073,9 @@ def render_video_card(video: VideoInfo, download_cover: bool = True, danmaku_lis
     canvas.paste(dur_overlay, (dur_x, dur_y), dur_overlay)
     draw.text((dur_x + dur_pad_x, dur_y + dur_pad_y - 5), dur_text, fill=COLOR_DURATION_TEXT, font=FONT_DURATION)
 
+    #draw qrcode
+    _draw_qrcode(canvas, f"https://bilibili.com/video/{video.bvid}", PADDING, COVER_HEIGHT - PADDING, 3)
+    
     # draw title
     y_cursor = COVER_HEIGHT + LINE_GAP
     for line in title_lines:
