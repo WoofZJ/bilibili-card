@@ -333,7 +333,7 @@ async def get_video_comments(
 async def get_video_comments_image(
     request: Request,
     bvid: str = Query(..., description="视频BV号", examples=["BV1VYf3BiEKJ"]),
-    max_comments: int = Query(15, description="最多显示评论数", ge=1, le=50),
+    max_comments: int = Query(4, description="最多显示评论数", ge=1, le=50),
 ):
     _enforce_rate_limit(request, "video/comments/image")
     comments_data = await _fetch_comments(bvid)
