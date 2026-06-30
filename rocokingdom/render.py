@@ -8,10 +8,10 @@ import random
 from rocokingdom.models import RocoMerchantItem, RocoMerchantResult
 
 
-CARD_WIDTH = 600
+CARD_WIDTH = 800
 PADDING = 28
 CONTENT_WIDTH = CARD_WIDTH - PADDING * 2
-ITEM_IMAGE_SIZE = 108
+ITEM_IMAGE_SIZE = 96
 ITEM_GAP = 16
 
 COLOR_BG = (255, 255, 255)
@@ -44,6 +44,7 @@ FONT_HERO = _load_font(_MAIN_FONT_PATH, 38)
 FONT_TITLE = _load_font(_MAIN_FONT_PATH, 30)
 FONT_BODY = _load_font(_MAIN_FONT_PATH, 24)
 FONT_META = _load_font(_MAIN_FONT_PATH, 21)
+FONT_TIME = _load_font(_MAIN_FONT_PATH, 22)
 FONT_SMALL = _load_font(_MAIN_FONT_PATH, 18)
 FONT_BADGE = _load_font(_MAIN_FONT_PATH, 20)
 FONT_ITEM = _load_font(_MAIN_FONT_PATH, 28)
@@ -51,28 +52,34 @@ FONT_FALLBACK = _load_font(_FALLBACK_FONT_PATH, 24, FONT_BODY)
 
 
 def render_merchant_card(result: RocoMerchantResult, download_images: bool = True) -> Image.Image:
-    item_count = max(len(result.items), 1)
-    item_block_height = item_count * (110 + PADDING)
-    card_height = 60 + PADDING + 26 + item_block_height
-
-    canvas = Image.new("RGBA", (CARD_WIDTH, card_height), COLOR_BG)
+    canvas = Image.new("RGBA", (CARD_WIDTH, 800), COLOR_BG)
     draw = ImageDraw.Draw(canvas)
 
     y = 0
     _draw_info_panel(draw, canvas, result, y)
-    y += 60
+    y += 76
     y += PADDING
 
     if result.items:
-        for item in result.items:
-            _draw_item(canvas, draw, item, PADDING, y, download_images=download_images)
-            y += 110 + PADDING
+        if len(result.items) <= 2:
+            for idx, item in enumerate(result.items):
+                _draw_item(canvas, draw, item, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
+                y += 120 + ITEM_GAP
+        else:
+            for idx, item in enumerate(result.items):
+                if idx % 2 == 1:
+                    x = CARD_WIDTH // 2 + ITEM_GAP // 2
+                else:
+                    x = PADDING
+                _draw_item(canvas, draw, item, x, y, CARD_WIDTH // 2 - PADDING - ITEM_GAP // 2, download_images=download_images)
+                if idx % 2 == 1 or idx == len(result.items) - 1:
+                    y += 120 + ITEM_GAP
     else:
         _draw_empty_state(draw, result, PADDING, y)
-        y += 110 + PADDING
+        y += 120 + ITEM_GAP
 
     _draw_copyright(draw, canvas, CARD_WIDTH//2-100, y)
-    return canvas
+    return canvas.crop((0, 0, CARD_WIDTH, y + 32))
 
 
 def render_merchant_to_bytes(result: RocoMerchantResult, download_images: bool = True) -> bytes:
@@ -83,16 +90,16 @@ def render_merchant_to_bytes(result: RocoMerchantResult, download_images: bool =
 
 
 def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: RocoMerchantResult, y: int) -> None:
-    draw.rectangle((0, y, CARD_WIDTH, y + 72), fill=COLOR_PANEL)
+    draw.rectangle((0, y, CARD_WIDTH, y + 76), fill=COLOR_PANEL)
 
     with open(str(_ASSETS_DIR / "roco_images.txt"), "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
         [image1, image2]= [random.choice(lines).strip(), random.choice(lines).strip()]
-    image1 = _load_item_image(image1, 60)
-    image2 = _load_item_image(image2, 60)
+    image1 = _load_item_image(image1, 72)
+    image2 = _load_item_image(image2, 72)
 
-    _draw_logo(canvas, image1, 30, 6, 60)
-    _draw_logo(canvas, image2, CARD_WIDTH - 60 - 30, 6, 60)
+    _draw_logo(canvas, image1, 50, 2, 72)
+    _draw_logo(canvas, image2, CARD_WIDTH - 72 - 50, 2, 72)
 
     if result.items:
         title = f"{result.short_date_text} 远行商人售卖商品" if result.short_date_text else "远行商人售卖商品"
@@ -105,8 +112,8 @@ def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: Roc
     if result.duration_hours and result.items:
         meta = f"{meta} 时间段" if meta else f"持续 {result.duration_hours:g} 小时"
     if meta:
-        meta_width = FONT_META.getlength(meta)
-        draw.text((CARD_WIDTH // 2 - meta_width // 2, y + 44), meta, fill=COLOR_SUB, font=FONT_META)
+        meta_width = FONT_TIME.getlength(meta)
+        draw.text((CARD_WIDTH // 2 - meta_width // 2, y + 44), meta, fill=COLOR_SUB, font=FONT_TIME)
 
 
 def _draw_item(
@@ -115,39 +122,41 @@ def _draw_item(
     item: RocoMerchantItem,
     x: int,
     y: int,
+    w: int,
     download_images: bool = True,
 ) -> None:
-    box = (x, y, CARD_WIDTH - x, y + 120)
+
+    box = (x, y, x + w, y + 120)
     draw.rounded_rectangle(box, radius=8, fill=COLOR_PANEL_ALT, outline=COLOR_LINE, width=1)
 
-    image_x = x + 18
-    image_y = y + 6
+    image_x = x + 12
+    image_y = y + 12
     item_image = _load_item_image(item.image, ITEM_IMAGE_SIZE) if download_images else None
     if item_image is None:
         item_image = _placeholder_item_image(ITEM_IMAGE_SIZE)
     canvas.paste(item_image, (image_x, image_y), item_image)
 
-    text_x = image_x + ITEM_IMAGE_SIZE + 22
+    text_x = image_x + ITEM_IMAGE_SIZE + 12
     title_max_width = CARD_WIDTH - PADDING - text_x - 16
     category_w = 0
     tag_x = 0
     if item.category:
         category_w = int(FONT_SMALL.getlength(item.category)) + 20
-        tag_x = CARD_WIDTH - PADDING - category_w - 16
+        tag_x = box[2] - 12 - category_w
         title_max_width = max(160, tag_x - text_x - 12)
 
     title = _truncate_text(item.name or "未知商品", FONT_ITEM, title_max_width)
     draw.text((text_x, y + 12), title, fill=COLOR_TITLE, font=FONT_ITEM)
 
     if item.category:
-        tag_y = y + 16
+        tag_y = y + 12
         draw.rounded_rectangle((tag_x, tag_y, tag_x + category_w, tag_y + 28), radius=14, fill=(238, 242, 235))
         draw.text((tag_x + 10, tag_y + 3), item.category, fill=COLOR_SUB, font=FONT_SMALL)
 
     price = item.price_raw or item.price
     price_text = f"价格：{price} 洛克贝" if price else "价格：--"
     draw.text((text_x, y + 48), price_text, fill=COLOR_PRICE, font=FONT_BODY)
-    draw.text((text_x, y + 76), f"限购：{item.limit or '--'}", fill=COLOR_SUB, font=FONT_BODY)
+    draw.text((text_x, y + 80), f"限购：{item.limit or '--'}", fill=COLOR_SUB, font=FONT_BODY)
 
 
 def _draw_empty_state(draw: ImageDraw.ImageDraw, result: RocoMerchantResult, x: int, y: int) -> None:
