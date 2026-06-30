@@ -10,7 +10,6 @@ API 路由:
   /health         健康检查
 """
 
-import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -26,17 +25,6 @@ async def lifespan(app: FastAPI):
     request_settings.set("impersonate", "safari")
     select_client("curl_cffi")
     logger.info("bilibili_api 客户端已初始化")
-
-    # ── 初始化 抖音 客户端 ──
-    try:
-        sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent / "douyin"))
-        from douyin.utils.common_util import init as dy_init
-        from douyin.router import set_auth
-        dy_auth = dy_init()
-        set_auth(dy_auth)
-        logger.info("抖音 API 客户端已初始化")
-    except Exception as e:
-        logger.warning("抖音 API 初始化失败（接口不可用）: %s", e)
 
     yield
 

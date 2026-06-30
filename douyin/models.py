@@ -1,6 +1,5 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
 
 
 class DouyinUserInfo(BaseModel):
@@ -46,7 +45,7 @@ class DouyinUserInfo(BaseModel):
 
     @classmethod
     def from_api(cls, data: dict) -> "DouyinUserInfo":
-        """从 DouyinAPI.get_user_info() 返回数据构造"""
+        """从抖音用户资料接口响应构造"""
         user = data.get("user", {})
         avatar_url = ""
         avatar_larger = user.get("avatar_larger", {})
@@ -154,7 +153,7 @@ class DouyinWorkInfo(BaseModel):
 
     @classmethod
     def from_api(cls, item: dict) -> "DouyinWorkInfo":
-        """从单条作品数据构造"""
+        """从单条作品接口数据构造"""
         author = item.get("author", {})
         statistics = item.get("statistics", {})
         video = item.get("video", {})

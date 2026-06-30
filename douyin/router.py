@@ -18,25 +18,11 @@ from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
 
 from log import logger, archive_json, archive_image
+from douyin import client as douyin_client
 from douyin.models import DouyinUserInfo, DouyinWorkInfo, DouyinCommentsData
 from douyin.render import render_to_bytes, render_comments_to_bytes
 
 router = APIRouter(prefix="/douyin", tags=["douyin"])
-
-# ── 全局 auth（由 app lifespan 初始化） ────────────
-_auth = None
-
-
-def set_auth(auth):
-    """由 app lifespan 调用，注入 DouyinAuth 实例"""
-    global _auth
-    _auth = auth
-
-
-def _get_auth():
-    if _auth is None:
-        raise HTTPException(status_code=503, detail="抖音 API 未初始化，请检查 DY_COOKIES 配置")
-    return _auth
 
 
 async def _run_sync(func, *args, **kwargs):
@@ -91,16 +77,14 @@ async def _fetch_user_info(user_sec_id: str) -> DouyinUserInfo:
         logger.info("缓存命中: user_info sec_uid=%s", user_sec_id)
         return cached
 
-    from douyin.dy_apis.douyin_api import DouyinAPI
-    auth = _get_auth()
     try:
-        raw = await _run_sync(DouyinAPI.get_user_info, auth, f"https://www.douyin.com/user/{user_sec_id}")
+        raw = await _run_sync(douyin_client.fetch_user_info, user_sec_id)
         result = DouyinUserInfo.from_api(raw)
-        logger.info("抖音 API 请求完成: get_user_info nickname=%s", result.nickname)
+        logger.info("抖音页面抓取完成: fetch_user_info nickname=%s", result.nickname)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("抖音 API 请求失败: get_user_info: %s", e)
+        logger.error("抖音页面抓取失败: fetch_user_info: %s", e)
         raise HTTPException(status_code=502, detail=f"获取用户信息失败: {e}")
 
     _cache_set(cache_key, result, ttl=60 * 60)
@@ -114,16 +98,14 @@ async def _fetch_user_works(user_sec_id: str) -> list[DouyinWorkInfo]:
         logger.info("缓存命中: user_works sec_uid=%s", user_sec_id)
         return cached
 
-    from douyin.dy_apis.douyin_api import DouyinAPI
-    auth = _get_auth()
     try:
-        raw = await _run_sync(DouyinAPI.get_user_all_work_info, auth, user_sec_id)
+        raw = await _run_sync(douyin_client.fetch_user_works, user_sec_id)
         result = DouyinWorkInfo.from_api_list(raw)
-        logger.info("抖音 API 请求完成: get_user_all_work_info, 作品数=%d", len(result))
+        logger.info("抖音页面抓取完成: fetch_user_works, 作品数=%d", len(result))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("抖音 API 请求失败: get_user_all_work_info: %s", e)
+        logger.error("抖音页面抓取失败: fetch_user_works: %s", e)
         raise HTTPException(status_code=502, detail=f"获取用户作品失败: {e}")
 
     _cache_set(cache_key, result, ttl=5 * 60)
@@ -139,18 +121,16 @@ async def _fetch_work_info(url: str) -> DouyinWorkInfo:
         logger.info("缓存命中: work_info url=%s", url)
         return cached
 
-    from douyin.dy_apis.douyin_api import DouyinAPI
-    auth = _get_auth()
     try:
-        raw = await _run_sync(DouyinAPI.get_work_info, auth, url)
+        raw = await _run_sync(douyin_client.fetch_work_info, url)
         aweme_detail = raw.get("aweme_detail", raw)
         result = DouyinWorkInfo.from_api(aweme_detail)
         archive_json("douyin", "work_info", result.aweme_id, aweme_detail)
-        logger.info("抖音 API 请求完成: get_work_info aweme_id=%s", result.aweme_id)
+        logger.info("抖音页面抓取完成: fetch_work_info aweme_id=%s", result.aweme_id)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("抖音 API 请求失败: get_work_info: %s", e)
+        logger.error("抖音页面抓取失败: fetch_work_info: %s", e)
         raise HTTPException(status_code=502, detail=f"获取作品信息失败: {e}")
 
     _cache_set(cache_key, result, ttl=60 * 60)
@@ -166,17 +146,15 @@ async def _fetch_comments(url: str) -> DouyinCommentsData:
         logger.info("缓存命中: comments url=%s", url)
         return cached
 
-    from douyin.dy_apis.douyin_api import DouyinAPI
-    auth = _get_auth()
     try:
-        raw = await _run_sync(DouyinAPI.get_work_out_comment, auth, url)
+        raw = await _run_sync(douyin_client.fetch_comments, url)
         result = DouyinCommentsData.from_api(raw)
         archive_json("douyin", "comments", url.rstrip("/").split("/")[-1].split("?")[0], raw if isinstance(raw, dict) else {"comments": raw})
-        logger.info("抖音 API 请求完成: get_work_out_comment, 评论数=%d", len(result.comments))
+        logger.info("抖音页面抓取完成: fetch_comments, 评论数=%d", len(result.comments))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("抖音 API 请求失败: get_work_out_comment: %s", e)
+        logger.error("抖音页面抓取失败: fetch_comments: %s", e)
         raise HTTPException(status_code=502, detail=f"获取评论失败: {e}")
 
     _cache_set(cache_key, result, ttl=120)
