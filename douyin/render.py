@@ -1,5 +1,6 @@
 import io
 import re
+import qrcode
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -701,6 +702,15 @@ def _draw_copyright(draw: ImageDraw.ImageDraw, canvas: Image.Image, x: int, y: i
     draw.text((x, y), text, fill=(255, 0, 0), font=FONT_SMALL)
 
 
+def _draw_qrcode(canvas: Image.Image, url: str, x: int, y_bottom: int, box_size: int):
+    """生成二维码并绘制到画布上"""
+    qr = qrcode.QRCode(version=1, box_size=box_size, border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color=COLOR_ACCENT, back_color="white").convert("RGBA")
+    canvas.paste(img, (x, y_bottom - img.height), img)
+
+
 # ── 视频卡片渲染 ─────────────────────────────────
 
 def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image.Image:
@@ -749,6 +759,9 @@ def render_work_card(work: DouyinWorkInfo, download_cover: bool = True) -> Image
         dur_draw.rectangle((0, 0, dur_tw + dur_pad_x * 2, dur_th + dur_pad_y * 2), fill=COLOR_DURATION_BG)
         canvas.paste(dur_overlay, (dur_x, dur_y), dur_overlay)
         draw.text((dur_x + dur_pad_x, dur_y + dur_pad_y - 5), dur_text, fill=COLOR_DURATION_TEXT, font=FONT_DURATION)
+
+    # 二维码
+    _draw_qrcode(canvas, f"https://www.douyin.com/video/{work.aweme_id}", PADDING, COVER_HEIGHT - PADDING, 3)
 
     # 标题（作品描述）
     y_cursor = COVER_HEIGHT + LINE_GAP

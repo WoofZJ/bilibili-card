@@ -13,7 +13,9 @@
 import time
 import asyncio
 import os
-from concurrent.futures import ThreadPoolExecutor
+import queue
+import threading
+from concurrent.futures import Future
 from functools import partial
 
 from fastapi import APIRouter, Query, HTTPException
@@ -26,10 +28,87 @@ from douyin.render import render_to_bytes, render_comments_to_bytes
 
 router = APIRouter(prefix="/douyin", tags=["douyin"])
 
-_DOUYIN_EXECUTOR = ThreadPoolExecutor(
+
+class _DaemonWorkerPool:
+    """轻量 daemon 线程池，避免 Playwright 关闭卡住时阻塞进程退出。"""
+
+    def __init__(self, max_workers: int, thread_name_prefix: str):
+        self._queue = queue.Queue()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._threads = [
+            threading.Thread(
+                target=self._worker,
+                name=f"{thread_name_prefix}_{index}",
+                daemon=True,
+            )
+            for index in range(max_workers)
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def submit(self, func, *args, **kwargs) -> Future:
+        future = Future()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            self._queue.put((future, func, args, kwargs))
+        return future
+
+    def shutdown(self, wait: bool = False, cancel_futures: bool = False) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if cancel_futures:
+                self._cancel_pending()
+            for _ in self._threads:
+                self._queue.put(None)
+
+        if wait:
+            for thread in self._threads:
+                thread.join()
+
+    def _cancel_pending(self) -> None:
+        pending_sentinels = []
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                pending_sentinels.append(item)
+                continue
+            future, _, _, _ = item
+            future.cancel()
+
+        for item in pending_sentinels:
+            self._queue.put(item)
+
+    def _worker(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+
+            future, func, args, kwargs = item
+            if not future.set_running_or_notify_cancel():
+                continue
+
+            try:
+                result = func(*args, **kwargs)
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+
+_DOUYIN_EXECUTOR = _DaemonWorkerPool(
     max_workers=max(1, int(os.getenv("DY_PLAYWRIGHT_WORKERS", "1"))),
     thread_name_prefix="douyin-playwright",
 )
+_DOUYIN_EXECUTOR_CLOSED = False
+_DOUYIN_SHUTDOWN_TIMEOUT = float(os.getenv("DY_PLAYWRIGHT_SHUTDOWN_TIMEOUT", "5"))
 
 
 async def _run_sync(func, *args, **kwargs):
@@ -40,13 +119,32 @@ async def _run_sync(func, *args, **kwargs):
 
 async def _run_douyin_sync(func, *args, **kwargs):
     """在固定线程中执行 Playwright 同步函数，复用同一个浏览器实例。"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_DOUYIN_EXECUTOR, partial(func, *args, **kwargs))
+    if _DOUYIN_EXECUTOR_CLOSED:
+        raise RuntimeError("抖音 Playwright 客户端已关闭")
+    future = _DOUYIN_EXECUTOR.submit(partial(func, *args, **kwargs))
+    return await asyncio.wrap_future(future)
 
 
 async def shutdown_client():
-    await _run_douyin_sync(douyin_client.close_browser)
-    _DOUYIN_EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    global _DOUYIN_EXECUTOR_CLOSED
+
+    if _DOUYIN_EXECUTOR_CLOSED:
+        return
+
+    _DOUYIN_EXECUTOR_CLOSED = True
+
+    try:
+        future = _DOUYIN_EXECUTOR.submit(douyin_client.close_browser)
+        await asyncio.wait_for(asyncio.wrap_future(future), timeout=_DOUYIN_SHUTDOWN_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "抖音 Playwright 客户端关闭超时，跳过等待: timeout=%.1fs",
+            _DOUYIN_SHUTDOWN_TIMEOUT,
+        )
+    except Exception as exc:
+        logger.warning("抖音 Playwright 客户端关闭失败: %s", exc)
+    finally:
+        _DOUYIN_EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
 
 # ── 缓存 ──────────────────────────────────────────
