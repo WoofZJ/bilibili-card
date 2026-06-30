@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 from contextlib import contextmanager
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +14,8 @@ COMMENT_LIST_API_PATH = "/aweme/v1/web/comment/list"
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_SCROLL_ROUNDS = 20
 DEFAULT_SCROLL_DELAY_MS = 1_200
+
+_thread_state = threading.local()
 
 
 def fetch_work_info(url: str) -> dict:
@@ -199,35 +202,112 @@ def _fetch_work_details_in_page(page, aweme_ids: list[str]) -> list[dict]:
 
 @contextmanager
 def _open_page():
-    sync_playwright, _ = _load_playwright()
-    with sync_playwright() as p:
-        browser_name = _browser_name()
-        browser_type = getattr(p, browser_name)
-        browser = browser_type.launch(**_launch_options(browser_name))
-        context = browser.new_context(
-            viewport={
-                "width": _env_int("DY_PLAYWRIGHT_WIDTH", 1707),
-                "height": _env_int("DY_PLAYWRIGHT_HEIGHT", 1067),
-            },
-            locale=os.getenv("DY_PLAYWRIGHT_LOCALE", "zh-CN"),
-            timezone_id=os.getenv("DY_PLAYWRIGHT_TIMEZONE", "Asia/Shanghai"),
-            user_agent=os.getenv("DY_PLAYWRIGHT_USER_AGENT") or None,
-            extra_http_headers={
-                "Accept-Language": os.getenv(
-                    "DY_PLAYWRIGHT_ACCEPT_LANGUAGE", "zh-CN,zh;q=0.9,en;q=0.8"
-                ),
-            },
-        )
-        context.set_default_timeout(_timeout_ms())
-        context.set_default_navigation_timeout(_timeout_ms())
-        context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+    if _persistent_browser_enabled():
+        context = _persistent_context()
+        page = context.new_page()
         try:
-            yield context.new_page()
+            yield page
         finally:
-            context.close()
-            browser.close()
+            page.close()
+        return
+
+    sync_playwright, _ = _load_playwright()
+    playwright = sync_playwright().start()
+    browser_name = _browser_name()
+    browser = getattr(playwright, browser_name).launch(**_launch_options(browser_name))
+    context = _new_context(browser)
+    try:
+        page = context.new_page()
+        try:
+            yield page
+        finally:
+            page.close()
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+
+def close_browser() -> None:
+    context = getattr(_thread_state, "context", None)
+    browser = getattr(_thread_state, "browser", None)
+    playwright = getattr(_thread_state, "playwright", None)
+
+    for obj in (context, browser, playwright):
+        if obj is None:
+            continue
+        try:
+            if obj is playwright:
+                obj.stop()
+            else:
+                obj.close()
+        except Exception:
+            pass
+
+    _thread_state.context = None
+    _thread_state.browser = None
+    _thread_state.playwright = None
+
+
+def _persistent_context():
+    context = getattr(_thread_state, "context", None)
+    if context is not None:
+        return context
+
+    sync_playwright, _ = _load_playwright()
+    playwright = sync_playwright().start()
+    browser_name = _browser_name()
+    browser = getattr(playwright, browser_name).launch(**_launch_options(browser_name))
+    context = _new_context(browser)
+
+    _thread_state.playwright = playwright
+    _thread_state.browser = browser
+    _thread_state.context = context
+    return context
+
+
+def _new_context(browser):
+    context_options = {
+        "viewport": {
+            "width": _env_int("DY_PLAYWRIGHT_WIDTH", 1707),
+            "height": _env_int("DY_PLAYWRIGHT_HEIGHT", 1067),
+        },
+        "locale": os.getenv("DY_PLAYWRIGHT_LOCALE", "zh-CN"),
+        "timezone_id": os.getenv("DY_PLAYWRIGHT_TIMEZONE", "Asia/Shanghai"),
+        "user_agent": os.getenv("DY_PLAYWRIGHT_USER_AGENT") or None,
+        "extra_http_headers": {
+            "Accept-Language": os.getenv(
+                "DY_PLAYWRIGHT_ACCEPT_LANGUAGE", "zh-CN,zh;q=0.9,en;q=0.8"
+            ),
+        },
+        "service_workers": os.getenv("DY_PLAYWRIGHT_SERVICE_WORKERS", "block"),
+    }
+    context = browser.new_context(**context_options)
+    context.set_default_timeout(_timeout_ms())
+    context.set_default_navigation_timeout(_timeout_ms())
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+    )
+    _block_static_resources(context)
+    return context
+
+
+def _block_static_resources(context) -> None:
+    blocked_types = {
+        value.strip()
+        for value in os.getenv("DY_PLAYWRIGHT_BLOCK_RESOURCES", "").split(",")
+        if value.strip()
+    }
+    if not blocked_types:
+        return
+
+    def handle(route):
+        if route.request.resource_type in blocked_types:
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route("**/*", handle)
 
 
 def _load_playwright():
@@ -344,6 +424,10 @@ def _browser_name() -> str:
     if browser not in {"chromium", "firefox", "webkit"}:
         return "chromium"
     return browser
+
+
+def _persistent_browser_enabled() -> bool:
+    return _env_bool("DY_PLAYWRIGHT_PERSISTENT_BROWSER", True)
 
 
 def _timeout_ms() -> int:

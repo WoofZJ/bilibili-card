@@ -26,7 +26,11 @@ async def lifespan(app: FastAPI):
     select_client("curl_cffi")
     logger.info("bilibili_api 客户端已初始化")
 
-    yield
+    try:
+        yield
+    finally:
+        from douyin.router import shutdown_client as shutdown_douyin_client
+        await shutdown_douyin_client()
 
 
 app = FastAPI(

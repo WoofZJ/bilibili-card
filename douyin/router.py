@@ -12,6 +12,8 @@
 
 import time
 import asyncio
+import os
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 from fastapi import APIRouter, Query, HTTPException
@@ -24,11 +26,27 @@ from douyin.render import render_to_bytes, render_comments_to_bytes
 
 router = APIRouter(prefix="/douyin", tags=["douyin"])
 
+_DOUYIN_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, int(os.getenv("DY_PLAYWRIGHT_WORKERS", "1"))),
+    thread_name_prefix="douyin-playwright",
+)
+
 
 async def _run_sync(func, *args, **kwargs):
     """在线程池中执行同步函数"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+
+
+async def _run_douyin_sync(func, *args, **kwargs):
+    """在固定线程中执行 Playwright 同步函数，复用同一个浏览器实例。"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_DOUYIN_EXECUTOR, partial(func, *args, **kwargs))
+
+
+async def shutdown_client():
+    await _run_douyin_sync(douyin_client.close_browser)
+    _DOUYIN_EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
 
 # ── 缓存 ──────────────────────────────────────────
@@ -78,7 +96,7 @@ async def _fetch_user_info(user_sec_id: str) -> DouyinUserInfo:
         return cached
 
     try:
-        raw = await _run_sync(douyin_client.fetch_user_info, user_sec_id)
+        raw = await _run_douyin_sync(douyin_client.fetch_user_info, user_sec_id)
         result = DouyinUserInfo.from_api(raw)
         logger.info("抖音页面抓取完成: fetch_user_info nickname=%s", result.nickname)
     except HTTPException:
@@ -99,7 +117,7 @@ async def _fetch_user_works(user_sec_id: str) -> list[DouyinWorkInfo]:
         return cached
 
     try:
-        raw = await _run_sync(douyin_client.fetch_user_works, user_sec_id)
+        raw = await _run_douyin_sync(douyin_client.fetch_user_works, user_sec_id)
         result = DouyinWorkInfo.from_api_list(raw)
         logger.info("抖音页面抓取完成: fetch_user_works, 作品数=%d", len(result))
     except HTTPException:
@@ -122,7 +140,7 @@ async def _fetch_work_info(url: str) -> DouyinWorkInfo:
         return cached
 
     try:
-        raw = await _run_sync(douyin_client.fetch_work_info, url)
+        raw = await _run_douyin_sync(douyin_client.fetch_work_info, url)
         aweme_detail = raw.get("aweme_detail", raw)
         result = DouyinWorkInfo.from_api(aweme_detail)
         archive_json("douyin", "work_info", result.aweme_id, aweme_detail)
@@ -147,7 +165,7 @@ async def _fetch_comments(url: str) -> DouyinCommentsData:
         return cached
 
     try:
-        raw = await _run_sync(douyin_client.fetch_comments, url)
+        raw = await _run_douyin_sync(douyin_client.fetch_comments, url)
         result = DouyinCommentsData.from_api(raw)
         archive_json("douyin", "comments", url.rstrip("/").split("/")[-1].split("?")[0], raw if isinstance(raw, dict) else {"comments": raw})
         logger.info("抖音页面抓取完成: fetch_comments, 评论数=%d", len(result.comments))
