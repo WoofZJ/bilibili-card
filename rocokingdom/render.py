@@ -4,6 +4,7 @@ from pathlib import Path
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+import random
 from rocokingdom.models import RocoMerchantItem, RocoMerchantResult
 
 
@@ -58,7 +59,7 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
     draw = ImageDraw.Draw(canvas)
 
     y = 0
-    _draw_info_panel(draw, result, y)
+    _draw_info_panel(draw, canvas, result, y)
     y += 60
     y += PADDING
 
@@ -81,22 +82,31 @@ def render_merchant_to_bytes(result: RocoMerchantResult, download_images: bool =
     return buffer.getvalue()
 
 
-def _draw_info_panel(draw: ImageDraw.ImageDraw, result: RocoMerchantResult, y: int) -> None:
-    draw.rounded_rectangle((PADDING, y, CARD_WIDTH - PADDING, y + 72), radius=8, fill=COLOR_PANEL)
+def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: RocoMerchantResult, y: int) -> None:
+    draw.rectangle((0, y, CARD_WIDTH, y + 72), fill=COLOR_PANEL)
+
+    with open(str(_ASSETS_DIR / "roco_images.txt"), "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+        [image1, image2]= [random.choice(lines).strip(), random.choice(lines).strip()]
+    image1 = _load_item_image(image1, 60)
+    image2 = _load_item_image(image2, 60)
+
+    _draw_logo(canvas, image1, 30, 6, 60)
+    _draw_logo(canvas, image2, CARD_WIDTH - 60 - 30, 6, 60)
 
     if result.items:
         title = f"{result.short_date_text} 远行商人售卖商品" if result.short_date_text else "远行商人售卖商品"
     else:
         title = "远行商人进货去了"
     title_width = FONT_TITLE.getlength(title)
-    draw.text((CARD_WIDTH // 2 - title_width // 2, y + 13), title, fill=COLOR_TEXT, font=FONT_TITLE)
+    draw.text((CARD_WIDTH // 2 - title_width // 2, y + 8), title, fill=COLOR_TEXT, font=FONT_TITLE)
 
     meta = result.time_range_text if result.items else result.next_refresh_text
     if result.duration_hours and result.items:
         meta = f"{meta} 时间段" if meta else f"持续 {result.duration_hours:g} 小时"
     if meta:
-        meta_width = FONT_SMALL.getlength(meta)
-        draw.text((CARD_WIDTH // 2 - meta_width // 2, y + 48), meta, fill=COLOR_SUB, font=FONT_SMALL)
+        meta_width = FONT_META.getlength(meta)
+        draw.text((CARD_WIDTH // 2 - meta_width // 2, y + 44), meta, fill=COLOR_SUB, font=FONT_META)
 
 
 def _draw_item(
@@ -182,9 +192,12 @@ def _placeholder_item_image(size: int) -> Image.Image:
     return image
 
 
-def _draw_logo(image: Image.Image, logo_path: str, x: int, y: int, height: int) -> int:
+def _draw_logo(image: Image.Image, logo_path: str | Image.Image, x: int, y: int, height: int) -> int:
     try:
-        logo = Image.open(logo_path).convert("RGBA")
+        if isinstance(logo_path, Image.Image):
+            logo = logo_path
+        else:
+            logo = Image.open(logo_path).convert("RGBA")
         w, h = logo.size
         scale = height / h
         new_w = int(w * scale)
