@@ -1,11 +1,12 @@
 """
-视频信息 Web API — 统一入口
+信息卡片 Web API — 统一入口
 
 启动: uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 API 路由:
   /bilibili/...   B站相关接口 (详见 bilibili/router.py)
   /douyin/...     抖音相关接口 (详见 douyin/router.py)
+  /rocokingdom/... 洛克王国相关接口 (详见 rocokingdom/router.py)
   /xiaoheihe/...   小黑盒相关接口 (详见 xiaoheihe/router.py)
   /health         健康检查
 """
@@ -34,8 +35,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="视频平台数据 API",
-    description="聚合 B站 / 抖音 / YouTube / 小黑盒 数据，支持 JSON 和卡片图片输出",
+    title="信息卡片 API",
+    description="聚合 B站 / 抖音 / YouTube / 小黑盒 / 洛克王国 数据，支持 JSON 和卡片图片输出",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -43,11 +44,13 @@ app = FastAPI(
 # ── 注册路由 ──────────────────────────────────────
 from bilibili.router import router as bilibili_router
 from douyin.router import router as douyin_router
+from rocokingdom.router import router as rocokingdom_router
 from youtube.router import router as youtube_router
 from xiaoheihe.router import router as xiaoheihe_router
 
 app.include_router(bilibili_router)
 app.include_router(douyin_router)
+app.include_router(rocokingdom_router)
 app.include_router(youtube_router)
 app.include_router(xiaoheihe_router)
 
