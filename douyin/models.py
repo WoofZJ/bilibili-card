@@ -191,7 +191,7 @@ class DouyinWorkInfo(BaseModel):
 
         return cls(
             aweme_id=str(item.get("aweme_id", "")),
-            title=item.get("desc", "--").split("#")[0].strip(),
+            title=item.get("desc", "--").strip(),
             desc=item.get("desc", ""),
             create_time=item.get("create_time", 0),
             duration=item.get("duration", 0),
