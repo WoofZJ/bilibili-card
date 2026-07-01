@@ -79,18 +79,19 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
         _draw_empty_state(draw, result, PADDING, y)
         y += 120 + ITEM_GAP
 
-    separate_text = "过往轮次售卖商品"
-    separate_text_w = FONT_BODY.getlength(separate_text)
-    draw.line((PADDING, y + FONT_BODY.size // 2, (CARD_WIDTH - PADDING - separate_text_w)//2, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
-    draw.line(((CARD_WIDTH + PADDING + separate_text_w)//2, y + FONT_BODY.size // 2, CARD_WIDTH - PADDING, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
-    draw.text((CARD_WIDTH // 2 - separate_text_w // 2, y), separate_text, fill=COLOR_SUB, font=FONT_BODY)
-    y += FONT_BODY.size + ITEM_GAP
     current_round = result.round if result.round is not None else 5
-    for round, items in reversed(result.rounds.items()):
-        if current_round <= round:
-            continue
-        _draw_shipped_items(canvas, draw, round, items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
-        y += 24 + SHIPPED_ITEM_IMAGE_SIZE + ITEM_GAP
+    if current_round > 1 and result.rounds:
+        separate_text = "过往轮次售卖商品"
+        separate_text_w = FONT_BODY.getlength(separate_text)
+        draw.line((PADDING, y + FONT_BODY.size // 2, (CARD_WIDTH - PADDING - separate_text_w)//2, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
+        draw.line(((CARD_WIDTH + PADDING + separate_text_w)//2, y + FONT_BODY.size // 2, CARD_WIDTH - PADDING, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
+        draw.text((CARD_WIDTH // 2 - separate_text_w // 2, y), separate_text, fill=COLOR_SUB, font=FONT_BODY)
+        y += FONT_BODY.size + ITEM_GAP
+        for round, items in reversed(result.rounds.items()):
+            if current_round <= round:
+                continue
+            _draw_shipped_items(canvas, draw, round, items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
+            y += 24 + SHIPPED_ITEM_IMAGE_SIZE + ITEM_GAP
 
     _draw_copyright(draw, canvas, CARD_WIDTH//2-100, y)
     return canvas.crop((0, 0, CARD_WIDTH, y + 32))
