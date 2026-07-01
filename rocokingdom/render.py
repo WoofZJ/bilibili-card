@@ -176,21 +176,20 @@ def _draw_item(
     canvas.paste(item_image, (image_x, image_y), item_image)
 
     text_x = image_x + ITEM_IMAGE_SIZE + 12
-    title_max_width = CARD_WIDTH - PADDING - text_x - 16
+    title_max_width = box[2] - PADDING - text_x
+
+    title = _truncate_text(item.name or "未知商品", FONT_ITEM, title_max_width)
+    draw.text((text_x, y + 12), title, fill=COLOR_TITLE, font=FONT_ITEM)
+
     category_w = 0
     tag_x = 0
     if item.category:
         category_w = int(FONT_SMALL.getlength(item.category)) + 20
         tag_x = box[2] - 12 - category_w
-        title_max_width = max(160, tag_x - text_x - 12)
-
-    title = _truncate_text(item.name or "未知商品", FONT_ITEM, title_max_width)
-    draw.text((text_x, y + 12), title, fill=COLOR_TITLE, font=FONT_ITEM)
-
-    if item.category:
-        tag_y = y + 12
-        draw.rounded_rectangle((tag_x, tag_y, tag_x + category_w, tag_y + 28), radius=14, fill=(238, 242, 235))
-        draw.text((tag_x + 10, tag_y + 3), item.category, fill=COLOR_SUB, font=FONT_SMALL)
+        if tag_x >= text_x + FONT_ITEM.getlength(title) + 12:
+            tag_y = y + 12
+            draw.rounded_rectangle((tag_x, tag_y, tag_x + category_w, tag_y + 28), radius=14, fill=(238, 242, 235))
+            draw.text((tag_x + 10, tag_y + 3), item.category, fill=COLOR_SUB, font=FONT_SMALL)
 
     price = item.price_raw or item.price
     price_text = f"价格：{price} 洛克贝" if price else "价格：--"
