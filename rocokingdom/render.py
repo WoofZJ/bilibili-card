@@ -28,6 +28,7 @@ COLOR_ACCENT_DARK = (25, 101, 65)
 COLOR_BADGE_BG = (224, 244, 232)
 COLOR_EMPTY_BG = (247, 245, 240)
 COLOR_PRICE = (173, 101, 33)
+COLOR_VALUABLE = (255, 180, 180)
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _MAIN_FONT_PATH = _ASSETS_DIR / "LXGWWenKaiMono-Regular.ttf"
@@ -192,7 +193,7 @@ def _draw_item(
 ) -> None:
 
     box = (x, y, x + w, y + 120)
-    draw.rounded_rectangle(box, radius=8, fill=COLOR_PANEL_ALT, outline=COLOR_LINE, width=1)
+    draw.rounded_rectangle(box, radius=8, fill=COLOR_PANEL_ALT if int(item.price) < 1000000 else COLOR_VALUABLE, outline=COLOR_LINE, width=1)
 
     image_x = x + 12
     image_y = y + 12
