@@ -57,11 +57,23 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
     draw = ImageDraw.Draw(canvas)
 
     y = 0
-    _draw_info_panel(draw, canvas, result, y)
+    _draw_info_panel(draw, canvas, result, y, download_images)
     y += 76
     y += PADDING
 
+    full_time_items = []
     if result.items:
+        for round, items in result.rounds.items():
+            for item in items:
+                if item.rounds == [1, 2, 3, 4] and item not in full_time_items:
+                    full_time_items.append(item)
+        for full_time_item in full_time_items:
+            if full_time_item in result.items:
+                result.items.remove(full_time_item)
+            for round, items in result.rounds.items():
+                if full_time_item in items:
+                    items.remove(full_time_item)
+
         if len(result.items) <= 2:
             for idx, item in enumerate(result.items):
                 _draw_item(canvas, draw, item, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
@@ -79,16 +91,24 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
         _draw_empty_state(draw, result, PADDING, y)
         y += 120 + ITEM_GAP
 
+
     current_round = result.round if result.round is not None else 5
-    if current_round > 1 and result.rounds:
-        separate_text = "过往轮次售卖商品"
+    if (current_round > 1 or len(full_time_items) > 0) and result.rounds:
+        if len(full_time_items) > 0:
+            result.rounds[6] = full_time_items
+            if current_round == 1:
+                separate_text = "全时段商品"
+            else:
+                separate_text = "全时段及过往轮次商品"
+        else:
+            separate_text = "过往轮次商品"
         separate_text_w = FONT_BODY.getlength(separate_text)
         draw.line((PADDING, y + FONT_BODY.size // 2, (CARD_WIDTH - PADDING - separate_text_w)//2, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
         draw.line(((CARD_WIDTH + PADDING + separate_text_w)//2, y + FONT_BODY.size // 2, CARD_WIDTH - PADDING, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
         draw.text((CARD_WIDTH // 2 - separate_text_w // 2, y), separate_text, fill=COLOR_SUB, font=FONT_BODY)
         y += FONT_BODY.size + ITEM_GAP
         for round, items in reversed(result.rounds.items()):
-            if current_round <= round:
+            if current_round <= round and round != 6:
                 continue
             _draw_shipped_items(canvas, draw, round, items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
             y += 24 + SHIPPED_ITEM_IMAGE_SIZE + ITEM_GAP
@@ -104,14 +124,18 @@ def render_merchant_to_bytes(result: RocoMerchantResult, download_images: bool =
     return buffer.getvalue()
 
 
-def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: RocoMerchantResult, y: int) -> None:
+def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: RocoMerchantResult, y: int, download_images: bool) -> None:
     draw.rectangle((0, y, CARD_WIDTH, y + 76), fill=COLOR_PANEL)
 
-    with open(str(_ASSETS_DIR / "roco_images.txt"), "r", encoding="utf-8") as f:
-        lines = f.read().splitlines()
-        [image1, image2]= [random.choice(lines).strip(), random.choice(lines).strip()]
-    image1 = _load_item_image(image1, 72)
-    image2 = _load_item_image(image2, 72)
+    if download_images:
+        with open(str(_ASSETS_DIR / "roco_images.txt"), "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+            [image1, image2]= [random.choice(lines).strip(), random.choice(lines).strip()]
+        image1 = _load_item_image(image1, 72)
+        image2 = _load_item_image(image2, 72)
+    else:
+        image1 = _placeholder_item_image(72, "精灵")
+        image2 = _placeholder_item_image(72, "精灵")
 
     _draw_logo(canvas, image1, 50, 2, 72)
     _draw_logo(canvas, image2, CARD_WIDTH - 72 - 50, 2, 72)
@@ -144,14 +168,15 @@ def _draw_shipped_items(
     text_x = x + PADDING
     text_y = y + (24 + SHIPPED_ITEM_IMAGE_SIZE - FONT_ITEM.size) // 2
 
-    shipped_text = f"第 {round} 轮"
-    draw.text((text_x , text_y), shipped_text, fill=COLOR_TITLE, font=FONT_ITEM)
-    image_x = x + PADDING + int(FONT_ITEM.getlength(shipped_text)) + PADDING
+    shipped_text = f"第 {round} 轮" if round != 6 else "全时段"
+    length = int(FONT_ITEM.getlength("第 1 轮"))
+    draw.text((text_x + (length - int(FONT_ITEM.getlength(shipped_text))) // 2, text_y), shipped_text, fill=COLOR_TITLE, font=FONT_ITEM)
+    image_x = x + PADDING + length + PADDING
     image_y = y + 12
     for item in items:
         item_image = _load_item_image(item.image, SHIPPED_ITEM_IMAGE_SIZE) if download_images else None
         if item_image is None:
-            item_image = _placeholder_item_image(SHIPPED_ITEM_IMAGE_SIZE)
+            item_image = _placeholder_item_image(SHIPPED_ITEM_IMAGE_SIZE, "商品")
         canvas.paste(item_image, (image_x, image_y), item_image)
         image_x += SHIPPED_ITEM_IMAGE_SIZE + 12
 
@@ -173,7 +198,7 @@ def _draw_item(
     image_y = y + 12
     item_image = _load_item_image(item.image, ITEM_IMAGE_SIZE) if download_images else None
     if item_image is None:
-        item_image = _placeholder_item_image(ITEM_IMAGE_SIZE)
+        item_image = _placeholder_item_image(ITEM_IMAGE_SIZE, "商品")
     canvas.paste(item_image, (image_x, image_y), item_image)
 
     text_x = image_x + ITEM_IMAGE_SIZE + 12
@@ -230,11 +255,10 @@ def _center_on_square(image: Image.Image, size: int) -> Image.Image:
     return canvas
 
 
-def _placeholder_item_image(size: int) -> Image.Image:
+def _placeholder_item_image(size: int, text: str) -> Image.Image:
     image = Image.new("RGBA", (size, size), (239, 244, 238, 255))
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=8, fill=(239, 244, 238), outline=COLOR_LINE)
-    text = "商品"
     text_w = FONT_META.getlength(text)
     draw.text(((size - text_w) / 2, size / 2 - 13), text, fill=COLOR_MUTED, font=FONT_META)
     return image
