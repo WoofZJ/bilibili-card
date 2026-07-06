@@ -9,6 +9,10 @@
         video_info/      ← B站视频信息 JSON 归档
         comments/        ← B站评论 JSON 归档
         image/           ← B站渲染图片归档
+      neteasecloud/
+        song_info/       ← 网易云歌曲信息 JSON 归档
+        song_url/        ← 网易云歌曲播放链接 JSON 归档
+        lyric/           ← 网易云歌词 JSON 归档
       douyin/
         work_info/       ← 抖音作品信息 JSON 归档
         comments/        ← 抖音评论 JSON 归档
@@ -29,6 +33,7 @@ _ARCHIVE_DIR = _LOG_DIR / "archive"
 for _platform, _subs in (
     ("bilibili", ("video_info", "comments", "image")),
     ("douyin", ("work_info", "comments", "image")),
+    ("neteasecloud", ("song_info", "song_url", "lyric")),
     ("youtube", ("video_info", "comments", "image")),
     ("xiaoheihe", ("post_info", "comments", "image")),
     ("rocokingdom", ("merchant", "image")),
