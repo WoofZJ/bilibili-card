@@ -8,11 +8,9 @@ from urllib.parse import parse_qs, urlparse
 
 DETAIL_API_PATH = "/aweme/v1/web/aweme/detail"
 USER_PROFILE_API_PATH = "/aweme/v1/web/user/profile/other"
-USER_POST_API_PATH = "/aweme/v1/web/aweme/post"
 COMMENT_LIST_API_PATH = "/aweme/v1/web/comment/list"
 
 DEFAULT_TIMEOUT_MS = 30_000
-DEFAULT_SCROLL_ROUNDS = 20
 DEFAULT_SCROLL_DELAY_MS = 1_200
 
 _thread_state = threading.local()
@@ -50,56 +48,6 @@ def fetch_user_info(user_sec_id: str) -> dict:
             return _response_json(response_info.value, required_key="user")
         except _playwright_timeout_error() as exc:
             raise TimeoutError(f"等待抖音用户资料接口超时: sec_uid={sec_uid}") from exc
-
-
-def fetch_user_works(user_sec_id: str) -> list[dict]:
-    """打开用户主页，滚动作品列表并合并页面发出的作品接口响应。"""
-    sec_uid = extract_sec_uid(user_sec_id)
-    page_url = build_user_page_url(sec_uid)
-
-    with _open_page() as page:
-        try:
-            with page.expect_response(
-                lambda response: _is_user_post_response(response.url, sec_uid),
-                timeout=_timeout_ms(),
-            ) as response_info:
-                page.goto(page_url, wait_until="domcontentloaded")
-            first_response = response_info.value
-        except _playwright_timeout_error() as exc:
-            raise TimeoutError(f"等待抖音用户作品接口超时: sec_uid={sec_uid}") from exc
-
-        try:
-            first_data = _response_json(first_response, required_key="aweme_list")
-        except (json.JSONDecodeError, RuntimeError):
-            aweme_ids = _extract_video_ids_from_page(page)
-            if not aweme_ids:
-                raise
-            return _fetch_work_details_in_page(page, aweme_ids)
-
-        responses = [first_data]
-        seen_urls = {first_response.url}
-
-        for _ in range(_scroll_rounds()):
-            if responses[-1].get("has_more") != 1:
-                break
-
-            try:
-                with page.expect_response(
-                    lambda response: (
-                        response.url not in seen_urls
-                        and _is_user_post_response(response.url, sec_uid)
-                    ),
-                    timeout=_scroll_response_timeout_ms(),
-                ) as response_info:
-                    page.mouse.wheel(0, _env_int("DY_PLAYWRIGHT_SCROLL_PIXELS", 1800))
-
-                response = response_info.value
-                seen_urls.add(response.url)
-                responses.append(_response_json(response, required_key="aweme_list"))
-            except _playwright_timeout_error():
-                break
-
-    return _merge_aweme_lists(responses)
 
 
 def fetch_comments(url: str) -> dict:
@@ -161,43 +109,6 @@ def build_video_page_url(url: str) -> str:
 
 def build_user_page_url(user_sec_id: str) -> str:
     return f"https://www.douyin.com/user/{extract_sec_uid(user_sec_id)}"
-
-
-def _extract_video_ids_from_page(page) -> list[str]:
-    hrefs = page.locator('a[href*="/video/"]').evaluate_all(
-        "(nodes) => nodes.map((node) => node.href)"
-    )
-    aweme_ids = []
-    seen = set()
-    for href in hrefs:
-        try:
-            aweme_id = extract_aweme_id(href)
-        except ValueError:
-            continue
-        if aweme_id in seen:
-            continue
-        seen.add(aweme_id)
-        aweme_ids.append(aweme_id)
-    return aweme_ids[: _env_int("DY_PLAYWRIGHT_USER_WORK_FALLBACK_LIMIT", 6)]
-
-
-def _fetch_work_details_in_page(page, aweme_ids: list[str]) -> list[dict]:
-    works = []
-    for aweme_id in aweme_ids:
-        try:
-            with page.expect_response(
-                lambda response: _is_detail_response(response.url, aweme_id),
-                timeout=_timeout_ms(),
-            ) as response_info:
-                page.goto(f"https://www.douyin.com/video/{aweme_id}", wait_until="domcontentloaded")
-            data = _response_json(response_info.value, required_key="aweme_detail")
-            works.append(data["aweme_detail"])
-        except _playwright_timeout_error():
-            continue
-
-    if not works:
-        raise TimeoutError("从用户页作品链接抓取详情失败")
-    return works
 
 
 @contextmanager
@@ -336,10 +247,6 @@ def _is_user_profile_response(response_url: str, sec_uid: str) -> bool:
     return _is_api_response(response_url, USER_PROFILE_API_PATH, "sec_user_id", sec_uid)
 
 
-def _is_user_post_response(response_url: str, sec_uid: str) -> bool:
-    return _is_api_response(response_url, USER_POST_API_PATH, "sec_user_id", sec_uid)
-
-
 def _is_comment_response(response_url: str, aweme_id: str) -> bool:
     return _is_api_response(response_url, COMMENT_LIST_API_PATH, "aweme_id", aweme_id)
 
@@ -376,21 +283,6 @@ def _response_json(response, required_key: str) -> dict:
     if required_key not in data:
         raise RuntimeError(f"抖音接口响应缺少 {required_key}: {list(data)[:8]}")
     return data
-
-
-def _merge_aweme_lists(responses: list[dict]) -> list[dict]:
-    works: list[dict] = []
-    seen_aweme_ids: set[str] = set()
-
-    for response in responses:
-        for item in response.get("aweme_list") or []:
-            aweme_id = str(item.get("aweme_id", ""))
-            if aweme_id in seen_aweme_ids:
-                continue
-            seen_aweme_ids.add(aweme_id)
-            works.append(item)
-
-    return works
 
 
 def _launch_options(browser_name: str) -> dict:
@@ -434,16 +326,8 @@ def _timeout_ms() -> int:
     return _env_int("DY_PLAYWRIGHT_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
 
 
-def _scroll_rounds() -> int:
-    return _env_int("DY_PLAYWRIGHT_WORK_SCROLL_ROUNDS", DEFAULT_SCROLL_ROUNDS)
-
-
 def _scroll_delay_ms() -> int:
     return _env_int("DY_PLAYWRIGHT_SCROLL_DELAY_MS", DEFAULT_SCROLL_DELAY_MS)
-
-
-def _scroll_response_timeout_ms() -> int:
-    return _env_int("DY_PLAYWRIGHT_SCROLL_RESPONSE_TIMEOUT_MS", 5_000)
 
 
 def _comment_scroll_rounds() -> int:

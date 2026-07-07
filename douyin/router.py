@@ -3,7 +3,6 @@
 
 端点:
   GET  /user/info?user_sec_id=xxx         获取用户信息
-  GET  /user/works?user_sec_id=xxx        获取用户全部作品
   GET  /work/info?url=xxx                 获取作品信息
   GET  /work/info/image?url=xxx           获取作品信息卡片图片
   GET  /work/comments?url=xxx             获取作品评论
@@ -207,27 +206,6 @@ async def _fetch_user_info(user_sec_id: str) -> DouyinUserInfo:
     return result
 
 
-async def _fetch_user_works(user_sec_id: str) -> list[DouyinWorkInfo]:
-    """获取用户全部作品（带缓存）"""
-    cache_key = f"dy_works:{user_sec_id}"
-    if cached := _cache_get(cache_key):
-        logger.info("缓存命中: user_works sec_uid=%s", user_sec_id)
-        return cached
-
-    try:
-        raw = await _run_douyin_sync(douyin_client.fetch_user_works, user_sec_id)
-        result = DouyinWorkInfo.from_api_list(raw)
-        logger.info("抖音页面抓取完成: fetch_user_works, 作品数=%d", len(result))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("抖音页面抓取失败: fetch_user_works: %s", e)
-        raise HTTPException(status_code=502, detail=f"获取用户作品失败: {e}")
-
-    _cache_set(cache_key, result, ttl=5 * 60)
-    return result
-
-
 async def _fetch_work_info(url: str) -> DouyinWorkInfo:
     """获取作品信息（带缓存，自动解析短链）"""
     url = await _resolve_short_url(url)
@@ -283,13 +261,6 @@ async def get_user_info(
     user_sec_id: str = Query(..., description="抖音用户 sec_uid", examples=["xxxxxx-xxxxxxxxxx"]),
 ):
     return await _fetch_user_info(user_sec_id)
-
-
-@router.get("/user/works", response_model=list[DouyinWorkInfo], summary="获取抖音用户全部作品")
-async def get_user_works(
-    user_sec_id: str = Query(..., description="抖音用户 sec_uid", examples=["xxxxxx-xxxxxxxxxx"]),
-):
-    return await _fetch_user_works(user_sec_id)
 
 
 @router.get("/work/info", response_model=DouyinWorkInfo, summary="获取抖音作品信息")
