@@ -405,7 +405,7 @@ async def get_opus_info_image(
 ):
     _enforce_rate_limit(request, "opus/info/image")
     opus_info = await _fetch_opus_info(opus_id)
-    img_bytes = render_opus_to_bytes(opus_info, download_images=False)
+    img_bytes = render_opus_to_bytes(opus_info)
     archive_image("bilibili", f"opus_{opus_id}", img_bytes)
     return Response(content=img_bytes, media_type="image/png")
 
