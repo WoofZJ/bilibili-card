@@ -10,6 +10,8 @@ B站视频信息 API 路由
   GET  /user/id?username=xxx              根据用户名获取用户ID
   GET  /video/comments?bvid=xxx           获取视频热门评论 JSON
   GET  /video/comments/image?bvid=xxx     获取视频热门评论卡片图片
+  GET  /opus/info/image?opus_id=xxx       获取图文卡片图片
+  GET  /opus/images?opus_id=xxx           获取图文正文全部图片 JSON
   GET  /live/room?room_id=xxx             获取直播间 JSON
   GET  /live/room/image?room_id=xxx       获取直播间卡片图片
 """
@@ -22,10 +24,15 @@ from fastapi import APIRouter, Query, HTTPException, Request
 from fastapi.responses import Response
 from dotenv import load_dotenv
 
-from bilibili_api import user, video, search, get_real_url, comment, live, Credential
+from bilibili_api import user, video, search, get_real_url, comment, live, opus, Credential
 
-from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData
-from bilibili.render import render_to_bytes, render_live_room_to_bytes, render_comments_to_bytes
+from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData, OpusInfo
+from bilibili.render import (
+    render_to_bytes,
+    render_live_room_to_bytes,
+    render_comments_to_bytes,
+    render_opus_to_bytes,
+)
 from log import logger, archive_json, archive_image
 
 
@@ -256,6 +263,53 @@ async def _fetch_live_room(room_id: int) -> LiveRoomInfo:
     return result
 
 
+async def _fetch_opus_info(opus_id: int) -> OpusInfo:
+    """获取图文详情并转换为卡片渲染模型（带缓存）。"""
+    cache_key = f"opus_info:{opus_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.info("缓存命中: opus info opus_id=%s", opus_id)
+        return cached
+
+    try:
+        opus_item = opus.Opus(opus_id, credential=_credential)
+        raw = await opus_item.get_info()
+        archive_json("bilibili", "opus_info", str(opus_id), raw)
+        logger.info("API 请求完成: opus.get_info opus_id=%s", opus_id)
+    except Exception as exc:
+        logger.error("API 请求失败: opus.get_info opus_id=%s: %s", opus_id, exc)
+        raise HTTPException(status_code=502, detail=f"获取图文信息失败: {exc}") from exc
+
+    result = OpusInfo.from_api(raw)
+    if result.opus_id <= 0:
+        result.opus_id = opus_id
+    _cache_set(cache_key, result, ttl=60 * 60)
+    return result
+
+
+async def _fetch_opus_images(opus_id: int) -> list[dict]:
+    """获取图文正文中的全部图片原始信息（带缓存）。"""
+    cache_key = f"opus_images:{opus_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.info("缓存命中: opus images opus_id=%s", opus_id)
+        return cached
+
+    try:
+        opus_item = opus.Opus(opus_id, credential=_credential)
+        images = await opus_item.get_images_raw_info()
+        if not isinstance(images, list):
+            raise TypeError("图文图片接口返回了非列表数据")
+        archive_json("bilibili", "opus_images", str(opus_id), images)
+        logger.info("API 请求完成: opus.get_images_raw_info opus_id=%s count=%s", opus_id, len(images))
+    except Exception as exc:
+        logger.error("API 请求失败: opus.get_images_raw_info opus_id=%s: %s", opus_id, exc)
+        raise HTTPException(status_code=502, detail=f"获取图文图片失败: {exc}") from exc
+
+    _cache_set(cache_key, images, ttl=60 * 60)
+    return images
+
+
 # ── API 端点 ──────────────────────────────────────
 @router.get("/video/latest", response_model=VideoInfo, summary="获取用户最新视频信息")
 async def get_latest_video(
@@ -342,6 +396,27 @@ async def get_video_comments_image(
     img_bytes = render_comments_to_bytes(comments_data, max_comments=max_comments)
     archive_image("bilibili", f"{bvid}_comments", img_bytes)
     return Response(content=img_bytes, media_type="image/png")
+
+
+@router.get("/opus/info/image", summary="根据 opus_id 获取B站图文卡片图片")
+async def get_opus_info_image(
+    request: Request,
+    opus_id: int = Query(..., description="B站图文 opus_id", gt=0, examples=[1225199552930250752]),
+):
+    _enforce_rate_limit(request, "opus/info/image")
+    opus_info = await _fetch_opus_info(opus_id)
+    img_bytes = render_opus_to_bytes(opus_info, download_images=False)
+    archive_image("bilibili", f"opus_{opus_id}", img_bytes)
+    return Response(content=img_bytes, media_type="image/png")
+
+
+@router.get("/opus/images", summary="根据 opus_id 获取B站图文中的全部图片")
+async def get_opus_images(
+    request: Request,
+    opus_id: int = Query(..., description="B站图文 opus_id", gt=0, examples=[1225199552930250752]),
+) -> list[dict]:
+    _enforce_rate_limit(request, "opus/images")
+    return await _fetch_opus_images(opus_id)
 
 
 @router.get("/live/room", response_model=LiveRoomInfo, summary="获取直播间信息")

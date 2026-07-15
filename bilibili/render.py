@@ -4,8 +4,19 @@ import random
 import qrcode
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
-from bilibili.models import VideoInfo, LiveRoomInfo, CommentsData, CommentItem, EmoteInfo, PictureInfo, JumpUrlInfo
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from bilibili.models import (
+    VideoInfo,
+    LiveRoomInfo,
+    CommentsData,
+    CommentItem,
+    EmoteInfo,
+    PictureInfo,
+    JumpUrlInfo,
+    OpusContentBlock,
+    OpusImage,
+    OpusInfo,
+)
 
 # ── 常量 ──────────────────────────────────────────
 CARD_WIDTH = 800
@@ -1650,3 +1661,396 @@ def render_comments_to_bytes(comments_data: CommentsData, fmt: str = "PNG", max_
     img.save(buf, format=fmt, quality=95)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ── 图文卡片 ──────────────────────────────────────
+OPUS_PADDING = 28
+OPUS_CONTENT_WIDTH = CARD_WIDTH - OPUS_PADDING * 2
+OPUS_AVATAR_SIZE = 58
+OPUS_IMAGE_MAX_HEIGHT = 760
+OPUS_TEXT_LINE_HEIGHT = 36
+OPUS_LINK_HEIGHT = 126
+OPUS_GRID_GAP = 8
+
+OPUS_FONT_TITLE = _find_font(34, bold=True)
+OPUS_FONT_BODY = _find_font(25)
+OPUS_FONT_META = _find_font(20)
+OPUS_FONT_SMALL = _find_font(18)
+OPUS_FONT_COUNT = _find_font(26, bold=True)
+OPUS_FONT_NAME = _find_font(22, bold=True)
+
+_opus_image_cache: dict[str, Image.Image | None] = {}
+
+
+def _opus_image_size(image: OpusImage) -> tuple[int, int]:
+    source_width = image.width or OPUS_CONTENT_WIDTH
+    source_height = image.height or 420
+    if source_width <= 0 or source_height <= 0:
+        return OPUS_CONTENT_WIDTH, 420
+    scale = min(OPUS_CONTENT_WIDTH / source_width, OPUS_IMAGE_MAX_HEIGHT / source_height)
+    return max(1, int(source_width * scale)), max(1, int(source_height * scale))
+
+
+def _load_opus_image(
+    url: str,
+    width: int,
+    height: int,
+    crop_to_fill: bool = False,
+) -> Image.Image | None:
+    cache_key = f"{url}:{width}:{height}:{crop_to_fill}"
+    if cache_key in _opus_image_cache:
+        cached = _opus_image_cache[cache_key]
+        return cached.copy() if cached else None
+    if not url:
+        return None
+
+    try:
+        import urllib.request
+
+        request = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com/",
+        })
+        with urllib.request.urlopen(request, timeout=15) as response:
+            image = Image.open(io.BytesIO(response.read())).convert("RGBA")
+        if crop_to_fill:
+            image = ImageOps.fit(
+                image,
+                (width, height),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+        else:
+            image = image.resize((width, height), Image.Resampling.LANCZOS)
+        _opus_image_cache[cache_key] = image
+        return image.copy()
+    except Exception as exc:
+        print(f"图文图片加载失败: {exc}")
+        _opus_image_cache[cache_key] = None
+        return None
+
+
+def _create_opus_image_placeholder(width: int, height: int) -> Image.Image:
+    image = Image.new("RGBA", (width, height), (244, 246, 248, 255))
+    draw = ImageDraw.Draw(image)
+    text = "图片加载失败"
+    text_width = OPUS_FONT_META.getlength(text)
+    draw.text(
+        ((width - text_width) / 2, (height - OPUS_FONT_META.size) / 2),
+        text,
+        fill=COLOR_SUB,
+        font=OPUS_FONT_META,
+    )
+    return image
+
+
+def _wrap_opus_text(
+    text: str,
+    emotes: dict[str, EmoteInfo],
+) -> list[list[Segment]]:
+    font_config = _get_font_config(OPUS_FONT_BODY.size)
+    segments = _parse_message_segments(
+        text,
+        emotes,
+        font_config=font_config,
+    )
+    lines, _ = _wrap_message_segments(
+        segments,
+        font_config,
+        OPUS_CONTENT_WIDTH,
+        max_lines=10000,
+        emote_size=30,
+    )
+    return lines
+
+
+def _measure_opus_blocks(
+    blocks: list[OpusContentBlock],
+    emotes: dict[str, EmoteInfo],
+) -> list[dict]:
+    measured: list[dict] = []
+    index = 0
+    while index < len(blocks):
+        block = blocks[index]
+        if block.type == "text" and block.text.strip():
+            lines = _wrap_opus_text(block.text.strip(), emotes)
+            measured.append({
+                "block": block,
+                "lines": lines,
+                "height": len(lines) * OPUS_TEXT_LINE_HEIGHT + 14,
+            })
+        elif block.type == "image" and block.image and block.image.url:
+            consecutive_images: list[OpusImage] = []
+            next_index = index
+            while next_index < len(blocks):
+                next_block = blocks[next_index]
+                if next_block.type != "image" or not next_block.image or not next_block.image.url:
+                    break
+                consecutive_images.append(next_block.image)
+                next_index += 1
+
+            if len(consecutive_images) == 1:
+                image_size = _opus_image_size(consecutive_images[0])
+                measured.append({
+                    "block": block,
+                    "image_size": image_size,
+                    "height": image_size[1] + 20,
+                })
+            else:
+                columns = 2 if len(consecutive_images) == 2 else 3
+                item_size = (
+                    OPUS_CONTENT_WIDTH - OPUS_GRID_GAP * (columns - 1)
+                ) // columns
+                rows = (len(consecutive_images) + columns - 1) // columns
+                grid_height = rows * item_size + (rows - 1) * OPUS_GRID_GAP
+                measured.append({
+                    "layout": "image_grid",
+                    "images": consecutive_images,
+                    "columns": columns,
+                    "item_size": item_size,
+                    "height": grid_height + 20,
+                })
+            index = next_index
+            continue
+        elif block.type == "link" and block.link:
+            measured.append({"block": block, "height": OPUS_LINK_HEIGHT + 18})
+        index += 1
+    return measured
+
+
+def _draw_opus_image_grid(
+    canvas: Image.Image,
+    images: list[OpusImage],
+    y: int,
+    columns: int,
+    item_size: int,
+    download_images: bool,
+) -> None:
+    for index, opus_image in enumerate(images):
+        column = index % columns
+        row = index // columns
+        image_x = OPUS_PADDING + column * (item_size + OPUS_GRID_GAP)
+        image_y = y + row * (item_size + OPUS_GRID_GAP)
+        image = None
+        if download_images:
+            image = _load_opus_image(
+                opus_image.url,
+                item_size,
+                item_size,
+                crop_to_fill=True,
+            )
+        if image is None:
+            image = _create_opus_image_placeholder(item_size, item_size)
+        canvas.paste(image, (image_x, image_y), image)
+
+
+def _draw_opus_tag(draw: ImageDraw.ImageDraw, x: int, y: int, label: str) -> int:
+    label = _truncate_text(label, OPUS_FONT_SMALL, 210)
+    display_text = f"#{label}"
+    width = int(OPUS_FONT_SMALL.getlength(display_text)) + 24
+    draw.rounded_rectangle(
+        (x, y, x + width, y + 32),
+        radius=8,
+        fill=(255, 239, 244),
+    )
+    draw.text((x + 12, y + 4), display_text, fill=COLOR_ACCENT, font=OPUS_FONT_SMALL)
+    return width
+
+
+def _draw_opus_link_card(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    block: OpusContentBlock,
+    y: int,
+    download_images: bool,
+) -> None:
+    link = block.link
+    if link is None:
+        return
+    draw.rounded_rectangle(
+        (OPUS_PADDING, y, CARD_WIDTH - OPUS_PADDING, y + OPUS_LINK_HEIGHT),
+        radius=12,
+        fill=(246, 247, 249),
+    )
+    cover_size = OPUS_LINK_HEIGHT - 20
+    cover_x = OPUS_PADDING + 10
+    cover_y = y + 10
+    cover = None
+    if download_images and link.cover:
+        cover = _load_opus_image(link.cover, cover_size, cover_size)
+    if cover is None:
+        cover = _create_opus_image_placeholder(cover_size, cover_size)
+    canvas.paste(cover, (cover_x, cover_y), cover)
+
+    text_x = cover_x + cover_size + 16
+    text_width = CARD_WIDTH - OPUS_PADDING - text_x - 18
+    title = _truncate_text(link.title or "相关链接", OPUS_FONT_NAME, text_width)
+    draw.text((text_x, y + 18), title, fill=COLOR_TITLE, font=OPUS_FONT_NAME)
+    description_lines = _wrap_text(link.description, OPUS_FONT_META, text_width, max_lines=2)
+    description_y = y + 53
+    for line in description_lines:
+        draw.text((text_x, description_y), line, fill=COLOR_SUB, font=OPUS_FONT_META)
+        description_y += 27
+    if link.button_text:
+        button = _truncate_text(link.button_text, OPUS_FONT_SMALL, 80)
+        button_width = int(OPUS_FONT_SMALL.getlength(button)) + 20
+        button_x = CARD_WIDTH - OPUS_PADDING - button_width - 12
+        draw.rounded_rectangle(
+            (button_x, y + OPUS_LINK_HEIGHT - 38, button_x + button_width, y + OPUS_LINK_HEIGHT - 10),
+            radius=8,
+            fill=(255, 225, 234),
+        )
+        draw.text((button_x + 10, y + OPUS_LINK_HEIGHT - 36), button, fill=COLOR_ACCENT, font=OPUS_FONT_SMALL)
+
+
+def render_opus_card(opus_info: OpusInfo, download_images: bool = True) -> Image.Image:
+    """将 B站图文正文按原始顺序渲染为长图卡片。"""
+    title = opus_info.title or "B站图文"
+    title_lines = _wrap_text(title, OPUS_FONT_TITLE, OPUS_CONTENT_WIDTH, max_lines=10000)
+    render_emotes = opus_info.emotes if download_images else {}
+    measured_blocks = _measure_opus_blocks(opus_info.blocks, render_emotes)
+    topic_names = list(dict.fromkeys(topic.name for topic in opus_info.topics if topic.name))[:4]
+
+    title_height = len(title_lines) * 44 + 10
+    blocks_height = sum(item["height"] for item in measured_blocks)
+    topics_height = 50 if topic_names else 0
+    footer_height = 18 + 65 + 36
+    total_height = (
+        OPUS_PADDING
+        + OPUS_AVATAR_SIZE + 22
+        + title_height
+        + blocks_height
+        + topics_height
+        + footer_height
+    )
+
+    canvas = Image.new("RGBA", (CARD_WIDTH, total_height), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(canvas)
+    y = OPUS_PADDING
+
+    avatar = None
+    if download_images and opus_info.author.face:
+        avatar = _load_avatar(opus_info.author.face, OPUS_AVATAR_SIZE)
+    if avatar is None:
+        avatar = _create_placeholder_avatar(OPUS_AVATAR_SIZE)
+    canvas.paste(avatar, (OPUS_PADDING, y), avatar)
+
+    author_name = opus_info.author.name or "B站用户"
+    author_name = _truncate_text(author_name, OPUS_FONT_NAME, 430)
+    _draw_text_with_fallback(
+        draw,
+        (OPUS_PADDING + OPUS_AVATAR_SIZE + 14, y + 4),
+        author_name,
+        COLOR_ACCENT if opus_info.author.is_vip else COLOR_TITLE,
+        OPUS_FONT_NAME,
+        canvas,
+    )
+    meta_parts = [opus_info.publish_time_str]
+    if opus_info.author.pub_location_text:
+        meta_parts.append(opus_info.author.pub_location_text)
+    meta = " · ".join(part for part in meta_parts if part)
+    draw.text(
+        (OPUS_PADDING + OPUS_AVATAR_SIZE + 14, y + 34),
+        _truncate_text(meta, OPUS_FONT_META, 500),
+        fill=COLOR_SUB,
+        font=OPUS_FONT_META,
+    )
+    _draw_logo(
+        canvas,
+        str(_ASSETS_DIR / "bilibili.png"),
+        CARD_WIDTH - OPUS_PADDING - 92,
+        y + 12,
+        32,
+    )
+    y += OPUS_AVATAR_SIZE + 22
+
+    for line in title_lines:
+        _draw_text_with_fallback(draw, (OPUS_PADDING, y), line, COLOR_TITLE, OPUS_FONT_TITLE, canvas)
+        y += 44
+    y += 10
+
+    body_font_config = _get_font_config(OPUS_FONT_BODY.size)
+    for block_info in measured_blocks:
+        if block_info.get("layout") == "image_grid":
+            _draw_opus_image_grid(
+                canvas,
+                block_info["images"],
+                y,
+                block_info["columns"],
+                block_info["item_size"],
+                download_images,
+            )
+            y += block_info["height"]
+            continue
+
+        block = block_info["block"]
+        if block.type == "text":
+            _draw_message_with_emotes(
+                canvas,
+                draw,
+                block_info["lines"],
+                OPUS_PADDING,
+                y,
+                body_font_config,
+                OPUS_TEXT_LINE_HEIGHT,
+                30,
+                COLOR_TITLE,
+            )
+            y += block_info["height"]
+        elif block.type == "image" and block.image:
+            image_width, image_height = block_info["image_size"]
+            image = None
+            if download_images:
+                image = _load_opus_image(block.image.url, image_width, image_height)
+            if image is None:
+                image = _create_opus_image_placeholder(image_width, image_height)
+            image_x = OPUS_PADDING + (OPUS_CONTENT_WIDTH - image_width) // 2
+            canvas.paste(image, (image_x, y), image)
+            y += block_info["height"]
+        elif block.type == "link":
+            _draw_opus_link_card(canvas, draw, block, y, download_images)
+            y += block_info["height"]
+
+    if topic_names:
+        y += 8
+        x = OPUS_PADDING
+        for topic_name in topic_names:
+            tag_width = _draw_opus_tag(draw, x, y, topic_name)
+            x += tag_width + 8
+            if x > CARD_WIDTH - OPUS_PADDING - 100:
+                break
+        y += 42
+
+    draw.line((OPUS_PADDING, y, CARD_WIDTH - OPUS_PADDING, y), fill=COLOR_DIVIDER, width=1)
+    y += 18
+    stats = [
+        ("点赞", opus_info.like),
+        ("评论", opus_info.comment),
+        ("收藏", opus_info.favorite),
+        ("转发", opus_info.forward),
+    ]
+    stat_width = OPUS_CONTENT_WIDTH // len(stats)
+    for index, (label, value) in enumerate(stats):
+        stat_x = OPUS_PADDING + index * stat_width
+        count = OpusInfo.format_count(value)
+        count_width = OPUS_FONT_COUNT.getlength(count)
+        label_width = OPUS_FONT_META.getlength(label)
+        draw.text((stat_x + (stat_width - count_width) / 2, y), count, fill=COLOR_TITLE, font=OPUS_FONT_COUNT)
+        draw.text((stat_x + (stat_width - label_width) / 2, y + 34), label, fill=COLOR_SUB, font=OPUS_FONT_META)
+
+    y += 65
+    _draw_copyright(draw, canvas, CARD_WIDTH // 2 - 100, y)
+    return canvas.convert("RGB")
+
+
+def render_opus_to_bytes(
+    opus_info: OpusInfo,
+    fmt: str = "PNG",
+    download_images: bool = True,
+) -> bytes:
+    """渲染 B站图文卡片并返回图片字节。"""
+    image = render_opus_card(opus_info, download_images=download_images)
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt, quality=95)
+    buffer.seek(0)
+    return buffer.getvalue()

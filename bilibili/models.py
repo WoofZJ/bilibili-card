@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from html import unescape
 from datetime import datetime
-from typing import Optional
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
 
 
 class EmoteInfo(BaseModel):
@@ -378,3 +380,284 @@ class LiveRoomInfo(BaseModel):
             fansclub=_to_int(medal.get("fansclub", 0)),
             guard_count=_to_int(guard_info.get("count", 0))
         )
+
+
+class OpusImage(BaseModel):
+    """B站图文中的一张正文图片。"""
+
+    url: str = ""
+    width: int = 0
+    height: int = 0
+    size: float = 0.0
+    live_url: str = ""
+    aigc: int = 0
+    warning: Any | None = None
+    comment: str = ""
+
+    @classmethod
+    def from_api(cls, data: dict | None) -> "OpusImage":
+        data = data or {}
+        return cls(
+            url=data.get("url", "") or "",
+            width=_opus_to_int(data.get("width")),
+            height=_opus_to_int(data.get("height")),
+            size=_opus_to_float(data.get("size")),
+            live_url=data.get("live_url", "") or "",
+            aigc=_opus_to_int(data.get("aigc")),
+            warning=data.get("warning"),
+            comment=data.get("comment", "") or "",
+        )
+
+
+class OpusAuthor(BaseModel):
+    mid: int = 0
+    name: str = ""
+    face: str = ""
+    pub_time: str = ""
+    pub_ts: int = 0
+    pub_location_text: str = ""
+    official_title: str = ""
+    is_vip: bool = False
+
+
+class OpusTopic(BaseModel):
+    id: str = ""
+    name: str = ""
+    jump_url: str = ""
+
+
+class OpusLinkCard(BaseModel):
+    """图文正文中的链接卡片。"""
+
+    title: str = ""
+    description: str = ""
+    cover: str = ""
+    jump_url: str = ""
+    button_text: str = ""
+
+
+class OpusContentBlock(BaseModel):
+    """按正文顺序保存的文本、图片或链接卡片。"""
+
+    type: Literal["text", "image", "link"]
+    text: str = ""
+    image: Optional[OpusImage] = None
+    link: Optional[OpusLinkCard] = None
+
+
+class OpusInfo(BaseModel):
+    """用于 B站图文卡片渲染的稳定数据模型。"""
+
+    opus_id: int
+    title: str = ""
+    author: OpusAuthor = Field(default_factory=OpusAuthor)
+    topics: list[OpusTopic] = Field(default_factory=list)
+    blocks: list[OpusContentBlock] = Field(default_factory=list)
+    images: list[OpusImage] = Field(default_factory=list)
+    emotes: dict[str, EmoteInfo] = Field(default_factory=dict)
+    forward: int = 0
+    comment: int = 0
+    like: int = 0
+    coin: int = 0
+    favorite: int = 0
+
+    @property
+    def publish_time_str(self) -> str:
+        if self.author.pub_time:
+            return self.author.pub_time
+        if self.author.pub_ts > 0:
+            return datetime.fromtimestamp(self.author.pub_ts).strftime("%Y-%m-%d %H:%M")
+        return ""
+
+    @property
+    def share_url(self) -> str:
+        return f"https://www.bilibili.com/opus/{self.opus_id}"
+
+    @staticmethod
+    def format_count(value: int) -> str:
+        return VideoInfo.format_count(value)
+
+    @classmethod
+    def from_api(cls, data: dict) -> "OpusInfo":
+        """从 ``opus.Opus.get_info()`` 的原始响应构造。"""
+        if "data" in data and isinstance(data["data"], dict):
+            data = data["data"]
+        item = data.get("item", data) or {}
+        modules = item.get("modules", []) or []
+
+        title = ""
+        author = OpusAuthor()
+        topics: list[OpusTopic] = []
+        blocks: list[OpusContentBlock] = []
+        images: list[OpusImage] = []
+        emotes: dict[str, EmoteInfo] = {}
+        stats: dict = {}
+
+        for module in modules:
+            if not isinstance(module, dict):
+                continue
+
+            title_data = module.get("module_title")
+            if isinstance(title_data, dict) and not title:
+                title = title_data.get("text", "") or ""
+
+            author_data = module.get("module_author")
+            if isinstance(author_data, dict):
+                vip = author_data.get("vip", {}) or {}
+                official = author_data.get("official", {}) or {}
+                author = OpusAuthor(
+                    mid=_opus_to_int(author_data.get("mid")),
+                    name=author_data.get("name", "") or "",
+                    face=author_data.get("face", "") or "",
+                    pub_time=author_data.get("pub_time", "") or "",
+                    pub_ts=_opus_to_int(author_data.get("pub_ts")),
+                    pub_location_text=author_data.get("pub_location_text", "") or "",
+                    official_title=official.get("title", "") or "",
+                    is_vip=_opus_to_int(vip.get("status")) == 1,
+                )
+
+            topic_data = module.get("module_topic")
+            if isinstance(topic_data, dict) and topic_data.get("name"):
+                topics.append(OpusTopic(
+                    id=str(topic_data.get("id", "") or ""),
+                    name=topic_data.get("name", "") or "",
+                    jump_url=topic_data.get("jump_url", "") or "",
+                ))
+
+            content = module.get("module_content")
+            if isinstance(content, dict):
+                for paragraph in content.get("paragraphs", []) or []:
+                    if not isinstance(paragraph, dict):
+                        continue
+                    para_type = _opus_to_int(paragraph.get("para_type"))
+                    if para_type == 1:
+                        text, paragraph_emotes = _parse_opus_text(paragraph)
+                        emotes.update(paragraph_emotes)
+                        if text.strip():
+                            blocks.append(OpusContentBlock(type="text", text=text.strip()))
+                    elif para_type == 2:
+                        pic_data = paragraph.get("pic", {}) or {}
+                        for raw_image in pic_data.get("pics", []) or []:
+                            image = OpusImage.from_api(raw_image)
+                            if not image.url:
+                                continue
+                            images.append(image)
+                            blocks.append(OpusContentBlock(type="image", image=image))
+                    elif para_type == 7:
+                        code = paragraph.get("code", {}) or {}
+                        code_text = unescape(code.get("content", "") or "").strip()
+                        if code_text:
+                            blocks.append(OpusContentBlock(type="text", text=code_text))
+
+                    link = _parse_opus_link_card(paragraph.get("link_card"))
+                    if link is not None:
+                        blocks.append(OpusContentBlock(type="link", link=link))
+
+            stat_data = module.get("module_stat")
+            if isinstance(stat_data, dict):
+                stats = stat_data
+
+        basic = item.get("basic", {}) or {}
+        opus_id = _opus_to_int(item.get("id_str") or item.get("id"))
+        if not title:
+            title = basic.get("title", "") or ""
+
+        def stat_count(name: str) -> int:
+            value = stats.get(name, {}) or {}
+            return _opus_to_int(value.get("count") if isinstance(value, dict) else value)
+
+        return cls(
+            opus_id=opus_id,
+            title=title,
+            author=author,
+            topics=topics,
+            blocks=blocks,
+            images=images,
+            emotes=emotes,
+            forward=stat_count("forward"),
+            comment=stat_count("comment"),
+            like=stat_count("like"),
+            coin=stat_count("coin"),
+            favorite=stat_count("favorite"),
+        )
+
+
+def _parse_opus_text(paragraph: dict) -> tuple[str, dict[str, EmoteInfo]]:
+    text_data = paragraph.get("text", {}) or {}
+    parts: list[str] = []
+    emotes: dict[str, EmoteInfo] = {}
+
+    for node in text_data.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        word = node.get("word")
+        if isinstance(word, dict):
+            parts.append(word.get("words", "") or "")
+            continue
+
+        rich = node.get("rich")
+        if isinstance(rich, dict):
+            rich_text = rich.get("text") or rich.get("orig_text") or ""
+            emoji = rich.get("emoji") or {}
+            if emoji:
+                rich_text = rich_text or emoji.get("text", "") or ""
+                if rich_text:
+                    emotes[rich_text] = EmoteInfo(
+                        text=rich_text,
+                        url=emoji.get("icon_url") or emoji.get("gif_url") or emoji.get("webp_url") or "",
+                        size=_opus_to_int(emoji.get("size"), 1),
+                    )
+            parts.append(rich_text)
+            continue
+
+        user_data = node.get("user")
+        if isinstance(user_data, dict):
+            name = user_data.get("name") or user_data.get("uname") or ""
+            if name:
+                parts.append(f"@{name}")
+            continue
+
+        formula = node.get("formula")
+        if isinstance(formula, dict):
+            parts.append(formula.get("content") or formula.get("tex") or "")
+
+    return "".join(parts), emotes
+
+
+def _parse_opus_link_card(data: dict | None) -> OpusLinkCard | None:
+    if not isinstance(data, dict):
+        return None
+    card = data.get("card", data) or {}
+    payload = None
+    for key in ("common", "ugc", "opus", "archive", "music", "live"):
+        value = card.get(key)
+        if isinstance(value, dict):
+            payload = value
+            break
+    if not payload:
+        return None
+
+    button = payload.get("button", {}) or {}
+    jump_style = button.get("jump_style", {}) or {}
+    descriptions = [payload.get("desc1", ""), payload.get("desc2", ""), payload.get("desc", "")]
+    return OpusLinkCard(
+        title=payload.get("title", "") or payload.get("name", "") or "",
+        description=" · ".join(str(value) for value in descriptions if value),
+        cover=payload.get("cover", "") or payload.get("cover_url", "") or "",
+        jump_url=payload.get("jump_url", "") or button.get("jump_url", "") or "",
+        button_text=jump_style.get("text", "") or "",
+    )
+
+
+def _opus_to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _opus_to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
