@@ -45,7 +45,17 @@ async def _fetch_merchant() -> RocoMerchantResult:
     try:
         raw = await run_in_threadpool(rocokingdom_client.fetch_merchant_info)
         result = RocoMerchantResult.from_api(raw)
-        archive_json("rocokingdom", "merchant", result.round_name, raw)
+        file_path = archive_json("rocokingdom", "merchant", result.round_name, raw)
+        folder_path = file_path.parent
+        for round in range(1, result.round):
+            if result.rounds[round]:
+                continue
+            file_path = folder_path / f"round_{round}.json"
+            if file_path.exists():
+                with open(file_path, "r", encoding="utf-8") as f:
+                    import json
+                    raw_round = json.load(f)
+                result.rounds[round] = RocoMerchantResult.from_api(raw_round).items
         logger.info("洛克王国远行商人请求完成: status=%s round=%s items=%d", result.status, result.round, len(result.items))
     except HTTPException:
         raise
