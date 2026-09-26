@@ -62,45 +62,38 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
     y += 76
     y += PADDING
 
-    full_time_items = []
-    if result.items:
-        for round, items in result.rounds.items():
-            for item in items:
-                if item.rounds == [1, 2, 3, 4] and item not in full_time_items:
-                    full_time_items.append(item)
-        for full_time_item in full_time_items:
-            if full_time_item in result.items:
-                result.items.remove(full_time_item)
-            for round, items in result.rounds.items():
-                if full_time_item in items:
-                    items.remove(full_time_item)
-
-        if len(result.items) <= 2:
-            for idx, item in enumerate(result.items):
+    full_time_items = list(result.rounds.get(0, []))
+    current_items = [item for item in result.items if item.round != 0]
+    if current_items:
+        if len(current_items) <= 2:
+            for item in current_items:
                 _draw_item(canvas, draw, item, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
                 y += 120 + ITEM_GAP
         else:
-            for idx, item in enumerate(result.items):
+            for idx, item in enumerate(current_items):
                 if idx % 2 == 1:
                     x = CARD_WIDTH // 2 + ITEM_GAP // 2
                 else:
                     x = PADDING
                 _draw_item(canvas, draw, item, x, y, CARD_WIDTH // 2 - PADDING - ITEM_GAP // 2, download_images=download_images)
-                if idx % 2 == 1 or idx == len(result.items) - 1:
+                if idx % 2 == 1 or idx == len(current_items) - 1:
                     y += 120 + ITEM_GAP
-    else:
+    elif not full_time_items:
         _draw_empty_state(draw, result, PADDING, y)
         y += 120 + ITEM_GAP
 
-
-    current_round = result.round if result.round is not None else 5
-    if (current_round > 1 or len(full_time_items) > 0) and result.rounds:
-        if len(full_time_items) > 0:
-            result.rounds[6] = full_time_items
-            if current_round == 1:
-                separate_text = "全时段商品"
-            else:
-                separate_text = "全时段及过往轮次商品"
+    past_rounds = [
+        (round_no, items)
+        for round_no, items in result.rounds.items()
+        if round_no > 0
+        and items
+        and (result.round is None or round_no < result.round)
+    ]
+    if full_time_items or past_rounds:
+        if full_time_items and past_rounds:
+            separate_text = "全时段及过往轮次商品"
+        elif full_time_items:
+            separate_text = "全时段商品"
         else:
             separate_text = "过往轮次商品"
         separate_text_w = FONT_BODY.getlength(separate_text)
@@ -108,10 +101,11 @@ def render_merchant_card(result: RocoMerchantResult, download_images: bool = Tru
         draw.line(((CARD_WIDTH + PADDING + separate_text_w)//2, y + FONT_BODY.size // 2, CARD_WIDTH - PADDING, y + FONT_BODY.size // 2), fill=COLOR_LINE, width=2)
         draw.text((CARD_WIDTH // 2 - separate_text_w // 2, y), separate_text, fill=COLOR_SUB, font=FONT_BODY)
         y += FONT_BODY.size + ITEM_GAP
-        for round, items in reversed(result.rounds.items()):
-            if current_round <= round and round != 6:
-                continue
-            _draw_shipped_items(canvas, draw, round, items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
+        if full_time_items:
+            _draw_shipped_items(canvas, draw, 0, full_time_items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
+            y += 24 + SHIPPED_ITEM_IMAGE_SIZE + ITEM_GAP
+        for round_no, items in sorted(past_rounds, reverse=True):
+            _draw_shipped_items(canvas, draw, round_no, items, PADDING, y, CARD_WIDTH - PADDING * 2, download_images=download_images)
             y += 24 + SHIPPED_ITEM_IMAGE_SIZE + ITEM_GAP
 
     _draw_copyright(draw, canvas, CARD_WIDTH//2-100, y)
@@ -145,8 +139,8 @@ def _draw_info_panel(draw: ImageDraw.ImageDraw, canvas: Image.Image, result: Roc
     title_width = FONT_TITLE.getlength(title)
     draw.text((CARD_WIDTH // 2 - title_width // 2, y + 8), title, fill=COLOR_TEXT, font=FONT_TITLE)
 
-    meta = result.time_range_text if result.items else result.next_refresh_text
-    if result.duration_hours and result.items:
+    meta = result.time_range_text if result.live else result.next_refresh_text
+    if result.duration_hours and result.live:
         meta = f"{meta} 时间段" if meta else f"持续 {result.duration_hours:g} 小时"
     if meta:
         meta_width = FONT_TIME.getlength(meta)
@@ -169,13 +163,13 @@ def _draw_shipped_items(
     text_x = x + PADDING
     text_y = y + (24 + SHIPPED_ITEM_IMAGE_SIZE - FONT_ITEM.size) // 2
 
-    shipped_text = f"第 {round} 轮" if round != 6 else "全时段"
+    shipped_text = f"第 {round} 轮" if round != 0 else "全时段"
     length = int(FONT_ITEM.getlength("第 1 轮"))
     draw.text((text_x + (length - int(FONT_ITEM.getlength(shipped_text))) // 2, text_y), shipped_text, fill=COLOR_TITLE, font=FONT_ITEM)
     image_x = x + PADDING + length + PADDING
     image_y = y + 12
     for item in items:
-        item_image = _load_item_image(item.image, SHIPPED_ITEM_IMAGE_SIZE) if download_images else None
+        item_image = _load_item_image(item.icon_url, SHIPPED_ITEM_IMAGE_SIZE) if download_images else None
         if item_image is None:
             item_image = _placeholder_item_image(SHIPPED_ITEM_IMAGE_SIZE, "商品")
         canvas.paste(item_image, (image_x, image_y), item_image)
@@ -193,11 +187,12 @@ def _draw_item(
 ) -> None:
 
     box = (x, y, x + w, y + 120)
-    draw.rounded_rectangle(box, radius=8, fill=COLOR_PANEL_ALT if int(item.price) < 1000000 else COLOR_VALUABLE, outline=COLOR_LINE, width=1)
+    panel_color = COLOR_VALUABLE if item.limit == 1 else COLOR_PANEL_ALT
+    draw.rounded_rectangle(box, radius=8, fill=panel_color, outline=COLOR_LINE, width=1)
 
     image_x = x + 12
     image_y = y + 12
-    item_image = _load_item_image(item.image, ITEM_IMAGE_SIZE) if download_images else None
+    item_image = _load_item_image(item.icon_url, ITEM_IMAGE_SIZE) if download_images else None
     if item_image is None:
         item_image = _placeholder_item_image(ITEM_IMAGE_SIZE, "商品")
     canvas.paste(item_image, (image_x, image_y), item_image)
@@ -206,22 +201,12 @@ def _draw_item(
     title_max_width = box[2] - PADDING - text_x
 
     title = _truncate_text(item.name or "未知商品", FONT_ITEM, title_max_width)
-    draw.text((text_x, y + 12), title, fill=COLOR_TITLE, font=FONT_ITEM)
+    draw.text((text_x, y + 20), title, fill=COLOR_TITLE, font=FONT_ITEM)
 
-    category_w = 0
-    tag_x = 0
-    if item.category:
-        category_w = int(FONT_SMALL.getlength(item.category)) + 20
-        tag_x = box[2] - 12 - category_w
-        if tag_x >= text_x + FONT_ITEM.getlength(title) + 12:
-            tag_y = y + 12
-            draw.rounded_rectangle((tag_x, tag_y, tag_x + category_w, tag_y + 28), radius=14, fill=(238, 242, 235))
-            draw.text((tag_x + 10, tag_y + 3), item.category, fill=COLOR_SUB, font=FONT_SMALL)
-
-    price = item.price_raw or item.price
-    price_text = f"价格：{price} 洛克贝" if price else "价格：--"
-    draw.text((text_x, y + 48), price_text, fill=COLOR_PRICE, font=FONT_BODY)
-    draw.text((text_x, y + 80), f"限购：{item.limit or '--'}", fill=COLOR_SUB, font=FONT_BODY)
+    # round_text = "全时段" if item.round == 0 else f"第 {item.round} 轮"
+    # draw.text((text_x, y + 48), round_text, fill=COLOR_PRICE, font=FONT_BODY)
+    limit_text = str(item.limit) if item.limit else "--"
+    draw.text((text_x, y + 60), f"限购：{limit_text}", fill=COLOR_SUB, font=FONT_BODY)
 
 
 def _draw_empty_state(draw: ImageDraw.ImageDraw, result: RocoMerchantResult, x: int, y: int) -> None:

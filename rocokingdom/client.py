@@ -14,11 +14,15 @@ def fetch_merchant_info(endpoint: str | None = None) -> dict:
     if not api_endpoint:
         raise RuntimeError("洛克王国远行商人 API 未配置")
 
+    print(api_endpoint)
+    print(os.getenv("ROCOKINGDOM_API_KEY", "").strip())
+
     response = requests.get(
         api_endpoint,
         headers={
             "User-Agent": "Mozilla/5.0",
             "Accept": "application/json,text/plain,*/*",
+            "X-API-Key": os.getenv("ROCOKINGDOM_API_KEY", "").strip(),
         },
         timeout=_timeout_seconds(),
     )

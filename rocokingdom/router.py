@@ -6,6 +6,7 @@
   GET /rocokingdom/merchant/info/image   返回远行商人信息卡片图片
 """
 
+import json
 import time
 
 from fastapi import APIRouter, HTTPException, Query
@@ -46,16 +47,17 @@ async def _fetch_merchant() -> RocoMerchantResult:
         raw = await run_in_threadpool(rocokingdom_client.fetch_merchant_info)
         result = RocoMerchantResult.from_api(raw)
         file_path = archive_json("rocokingdom", "merchant", result.round_name, raw)
-        folder_path = file_path.parent
-        for round in range(1, result.round):
-            if result.rounds[round]:
+        for round_no in range(1, result.round or 1):
+            if result.rounds.get(round_no):
                 continue
-            file_path = folder_path / f"round_{round}.json"
-            if file_path.exists():
-                with open(file_path, "r", encoding="utf-8") as f:
-                    import json
-                    raw_round = json.load(f)
-                result.rounds[round] = RocoMerchantResult.from_api(raw_round).items
+            archived_round = file_path.parent / f"round_{round_no}.json"
+            if not archived_round.exists():
+                continue
+            with open(archived_round, "r", encoding="utf-8") as file:
+                archived_raw = json.load(file)
+            archived_result = RocoMerchantResult.from_api(archived_raw)
+            if archived_result.rounds.get(round_no):
+                result.rounds[round_no] = archived_result.rounds[round_no]
         logger.info("洛克王国远行商人请求完成: status=%s round=%s items=%d", result.status, result.round, len(result.items))
     except HTTPException:
         raise
